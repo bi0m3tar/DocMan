@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.8] - 2026-02-25
+
+### Fixed
+
+- Removed Info and Inspect from Container Action menu when a project is highlighted.
+
+---
+
 ## [1.0.7] - 2026-02-25
 
 ### Fixed
