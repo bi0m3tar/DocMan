@@ -1,141 +1,161 @@
-# DocMan - Docker Container Manager
+# DocMan — DOcker Container MANager
 
-A modern .NET console application for managing Docker containers with an interactive terminal UI.
+A lightweight, keyboard-driven terminal UI for managing Docker containers running in WSL. No Docker Desktop required.
 
-## Features
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4) ![Platform](https://img.shields.io/badge/platform-Windows-0078D4) ![License](https://img.shields.io/badge/license-MIT-green)
 
-- **Interactive TUI**: Navigate containers with arrow keys
-- **Container Grouping**: Automatically groups containers by Docker Compose project with dedicated project rows
-- **Project-Level Actions**: Select a project row to perform actions on all containers in that project
-- **Multi-Select**: Mark multiple containers/projects with spacebar for batch operations
-- **Checkbox Indicators**: Clear `[ ]` and `[x]` markers for selected items
-- **Overlay Menus**: Clean, dismissible menus for actions with proper background rendering
-- **Live Log Inspection**: View last 20 lines of container logs with live updates every second
-- **Color-Coded Status**: Visual indication of container health and status (separate columns)
-- **Compose Integration**: Quick restart action for docker-compose
-- **WSL Management**: Built-in WSL restart capability
+---
 
 ## Requirements
 
-- .NET 8.0 Runtime
-- Docker Desktop for Windows (running)
-- Windows Terminal (recommended for best experience)
+- Windows 10 / 11
+- [WSL](https://aka.ms/wsl) with a Linux distro (Ubuntu recommended)
+- Docker Engine installed **inside WSL** (not Docker Desktop)
 
-## Usage
+```bash
+# Install Docker Engine in WSL
+curl -fsSL https://get.docker.com | sudo sh
+```
 
-Run the application from the DocMan directory:
+DocMan will check for WSL and Docker at startup and print a clear error message if either is missing.
+
+---
+
+## Installation
+
+### Run from source
 
 ```powershell
+git clone https://github.com/youruser/docman.git
+cd docman
 dotnet run
 ```
 
-Or build and run the executable:
+### Build a self-contained single-file executable
 
 ```powershell
-dotnet build
-.\bin\Debug\net8.0\DocMan.exe
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+.\publish\DocMan.exe
 ```
 
-### Keyboard Controls
+### Optional: adjust the refresh interval (default 5 seconds)
+
+```powershell
+.\DocMan.exe -Interval 3
+```
+
+---
+
+## Features
+
+- **Container list** grouped by Docker Compose project, with standalone containers listed separately
+- **Multi-select** — mark individual containers or whole projects with `Space`
+- **Batch operations** — start, stop, or delete all marked items at once
+- **Global actions** — start all / stop all / delete all without selecting anything
+- **Live log tail** — real-time log panel pinned to the bottom of the screen (`I`)
+- **Container Info** — detailed view with image, volumes, network settings, CPU, memory, net/disk I/O, and PID count (auto-refreshes every 2 s)
+- **Log inspector** — last 20 lines of container logs
+- **Terminal access** — open an interactive shell inside any running container
+- **Docker Engine update** — upgrade docker-ce in WSL without leaving the app (`U`)
+- **WSL restart** — shut down and restart WSL (`W`)
+- **Version bar** — shows installed docker-ce version vs latest available, highlighted in red when an update is ready
+- **Resource bar** — total CPU %, memory usage, and core count across all running containers
+- **Startup checks** — validates WSL is installed, can start, and that Docker is available before the UI loads
+
+---
+
+## Keyboard Controls
+
+### Main screen
 
 | Key | Action |
 |-----|--------|
-| ↑/↓ | Navigate containers and projects |
-| Space | Mark/unmark container or project (marking project marks all its containers) |
-| Enter | Show action menu for selected/marked items |
-| R | Toggle between all containers and running-only view |
-| D | Restart Docker daemon |
-| W | Restart WSL |
-| Q | Quit application |
+| `↑` / `↓` | Navigate the container list |
+| `Space` | Mark / unmark container or project (marking a project marks all its services) |
+| `Enter` | Open action menu for selected / marked items |
+| `P` | Start all stopped containers |
+| `S` | Stop all running containers |
+| `D` | Delete all containers (with confirmation) |
+| `I` | Toggle live log tail panel |
+| `R` | Toggle running-only filter |
+| `U` | Update Docker Engine in WSL (apt upgrade) |
+| `W` | Restart WSL |
+| `Q` | Quit |
 
-### Action Menu
+### Action menu (Enter)
 
-When you press Enter, you'll see an overlay menu with these options:
+| Option | Description |
+|--------|-------------|
+| Start | Start selected container(s) or compose project |
+| Stop | Stop selected container(s) |
+| Restart | Restart selected container(s) |
+| Recreate | `docker compose up --force-recreate` (compose containers only) |
+| Delete | Remove selected container(s) |
+| Inspect | View last 20 lines of logs |
+| Info | Detailed container info + live resource stats |
+| Terminal | Open interactive shell (running containers only) |
 
-1. **Stop** - Stop selected container(s)
-2. **Start** - Start selected container(s)
-3. **Restart** - Restart selected container(s)
-4. **Inspect** - View last 20 lines of logs (live updating)
-5. **Delete** - Remove selected container(s)
+Press `C` or `Esc` to dismiss the menu without taking action.
 
-### Optional Arguments
+---
 
-```powershell
-# Custom refresh interval (default: 5 seconds)
-dotnet run -- -Interval 3
+## Display
+
+```
+DocMan - DOcker Container MANager  v1.0.7
+↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions
+P:Start All │ S:Stop All │ D:Delete All │ I:Inspect │ R:Toggle Running │ U:Update Docker │ W:Restart WSL/Docker │ Q:Quit
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+ M   NAME                                      ID             IMAGE            PORTS          STATUS
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+[ ]  myapi                                                                                            
+[ ]    db                                      a1b2c3d4e5f6   postgres         5432→5432      Up 2 hours
+[ ]    web                                     f6e5d4c3b2a1   nginx            8080→80        Up 2 hours
+[ ]  standalone-redis                          1122334455aa   redis            6379→6379      Exited 5 min ago
 ```
 
-## Display Format
+- **Project rows** (cyan) represent a Docker Compose project; selecting one applies actions to all its services
+- **Service rows** are indented under their project
+- **Standalone containers** (not part of a compose project) appear at the top in yellow
+- **Status colours**: green = running, yellow = restarting, red = stopped/exited
 
-```
-M    NAME                                     ID            IMAGE                     STATUS                      HEALTH     PORTS
------------------------------------------------------------------------------------------------------------------------------------
-[ ]  datamart                                                                                                                    
-[x]    db-1                                   01999231de34  postgres                  Exited (255) 9 months       none       5432→5432
-[ ]    dips-1                                 7f343b71fd33  dips/integration          Exited (255) 9 months       none       
-[ ]  mors-messageintegration                                                                                                     
-[ ]    causecodeupdater                       2555e3ecce7c  mors/updater              Up 6 minutes                healthy    
-[x]  worktasks-service-dev                                                                                                       
-[x]    db-1                                   cb64bb934ad6  postgres                  Exited (137) 23 hours       none       5433→5432
-[x]    rabbitmq-1                             bada3cc73c82  rabbitmq                  Exited (0) 16 minutes       none       5672→5672, 15672...
-```
-
-- **M**: Mark indicator (`[ ]` = unmarked, `[x]` = marked for batch operation)
-- **NAME**: Container name (project rows in cyan, services indented with 2 spaces)
-- **ID**: Short container ID (12 characters)
-- **IMAGE**: Docker image name (without tag/digest)
-- **STATUS**: Current container status
-- **HEALTH**: Health check status (healthy/unhealthy/none)
-- **PORTS**: Published ports in format `publicPort→privatePort` (shows first 2, then `...`)
-
-### Project Row Actions
-
-When you select/mark a project row:
-- All containers in that project are automatically included
-- Marking a project with Space automatically marks all its containers with `[x]`
-- Actions apply to all containers in the project
-
-### Running Filter
-
-Press `R` to toggle the running-only filter:
-- **OFF** (default): Shows all containers (running and stopped)
-- **ON**: Shows only running containers
-- Status displayed in header: `[RUNNING ONLY]`
-- **SERVICE**: Service name within the project
-- **ID**: Short container ID
-- **STATUS**: Current container status
-- **HEALTH**: Health check status (if available)
+---
 
 ## Project Structure
 
 ```
 DocMan/
-├── Models/              # Data models
-│   ├── ContainerInfo.cs
-│   └── ContainerGroup.cs
-├── Services/            # Docker and Compose services
-│   ├── DockerService.cs
-│   └── ComposeService.cs
-├── UI/                  # Console UI components
-│   ├── Screen.cs
-│   ├── ContainerListView.cs
-│   ├── Overlay.cs
-│   ├── ActionMenu.cs
-│   └── LogViewer.cs
-├── Utilities/           # Helper classes
+├── Models/
+│   ├── ContainerInfo.cs        # Lightweight container model used in the main list
+│   ├── ContainerDetail.cs      # Detailed model used by the Info viewer
+│   ├── ContainerGroup.cs
+│   └── DisplayRow.cs
+├── Services/
+│   ├── DockerService.cs        # All docker / WSL process calls
+│   └── ComposeService.cs       # docker-compose operations and WSL restart
+├── UI/
+│   ├── Screen.cs               # Console helpers + VT processing + scroll region
+│   ├── ContainerListView.cs    # Main list renderer
+│   ├── ActionMenu.cs           # Per-container action overlay
+│   ├── InfoViewer.cs           # Detailed container info + live stats
+│   ├── LogViewer.cs            # Log inspector
+│   ├── Overlay.cs              # Generic overlay box
+│   └── (terminal in Program.cs)
+├── Utilities/
 │   └── ContainerNameParser.cs
-└── Program.cs           # Main application loop
+├── Program.cs                  # Main loop, input handling, terminal access
+└── run.ps1                     # Quick launcher
 ```
 
-## Building
+---
 
-```powershell
-cd DocMan
-dotnet build -c Release
-```
+## Why not Docker Desktop?
 
-The compiled executable will be in `bin/Release/net8.0/DocMan.exe`
+Docker Desktop is a 700 MB+ GUI application. DocMan is a ~3 MB self-contained executable that talks directly to Docker Engine in WSL. It starts instantly, uses ~18 MB RAM, and stays out of the way.
+
+---
 
 ## License
 
-This project is provided as-is for Docker container management.
+MIT
+
