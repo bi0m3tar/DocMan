@@ -57,8 +57,11 @@ public class ActionMenu
         if (canRecreate)
             menuItems.Add(("Recreate (up --force-recreate)", 3));
         menuItems.Add(("Delete",             5));
-        menuItems.Add(("Inspect",            4));
-        menuItems.Add(("Info",               8));
+        if (!isProjectSelected)
+        {
+            menuItems.Add(("Inspect",        4));
+            menuItems.Add(("Info",           8));
+        }
         if (canTerminal)
             menuItems.Add(("Terminal",       7));
 
