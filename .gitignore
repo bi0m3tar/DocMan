@@ -1,0 +1,21 @@
+# Build outputs
+bin/
+obj/
+
+# Publish output
+publish/
+
+# NuGet packages
+nupkg/
+*.nupkg
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# Rider
+.idea/
+
+# macOS
+.DS_Store

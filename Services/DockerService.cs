@@ -1,0 +1,480 @@
+using System.Diagnostics;
+using System.Text.Json;
+using DocMan.Models;
+using DocMan.Utilities;
+
+namespace DocMan.Services;
+
+public class DockerService
+{
+    private int _cachedCores = 0;
+
+    private static async Task<(string output, string stderr, int exitCode)> RunWslDetailedAsync(string arguments)
+    {
+        var psi = new ProcessStartInfo("wsl", arguments)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        using var proc = Process.Start(psi)!;
+        var outputTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        return (((await outputTask).Trim()), ((await stderrTask).Trim()), proc.ExitCode);
+    }
+
+    private static async Task<string> RunWslAsync(string arguments)
+    {
+        var (output, _, _) = await RunWslDetailedAsync(arguments);
+        return output;
+    }
+
+    /// <summary>
+    /// Checks WSL availability and Docker installation before the UI starts.
+    /// Returns null on success, or an error message string on failure.
+    /// </summary>
+    public static async Task<string?> CheckPrerequisitesAsync()
+    {
+        // 1. Check if wsl.exe is available
+        ProcessStartInfo wslVersionPsi;
+        try
+        {
+            wslVersionPsi = new ProcessStartInfo("wsl", "--version")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using var vProc = Process.Start(wslVersionPsi);
+            if (vProc == null)
+                return "WSL is not installed or not accessible.\nInstall WSL: https://aka.ms/wsl";
+            await vProc.WaitForExitAsync();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return "WSL is not installed.\nInstall it by running:  wsl --install\nSee: https://aka.ms/wsl";
+        }
+
+        // 2. Check if WSL can actually launch a shell (default distro present & working)
+        var (echoOut, echoErr, echoExit) = await RunWslDetailedAsync("echo __wsl_ok__");
+        if (echoExit != 0 || !echoOut.Contains("__wsl_ok__"))
+        {
+            var hint = string.IsNullOrWhiteSpace(echoErr) ? "" : $"\n  {echoErr.Split('\n')[0]}";
+            return $"WSL is installed but could not start.{hint}\n\nPossible fixes:\n  wsl --install\n  wsl --set-default <distro-name>";
+        }
+
+        // 3. Check if docker is available inside WSL
+        var (dockerOut, _, dockerExit) = await RunWslDetailedAsync("docker --version");
+        if (dockerExit != 0 || !dockerOut.Contains("Docker"))
+        {
+            return "Docker is not installed in WSL.\nInstall it inside your WSL distro:\n  curl -fsSL https://get.docker.com | sudo sh";
+        }
+
+        return null;
+    }
+
+    public async Task<List<ContainerInfo>> GetContainersAsync()
+    {
+        var (idsRaw, idsErr, idsExit) = await RunWslDetailedAsync("docker ps -aq --no-trunc");
+
+        if (idsExit != 0 || (!string.IsNullOrWhiteSpace(idsErr) && string.IsNullOrWhiteSpace(idsRaw)))
+        {
+            // Detect Docker Desktop binary used without Docker Desktop running
+            var (whichOut, _, _) = await RunWslDetailedAsync("-- which docker");
+            if (whichOut.Contains("/mnt/c/"))
+                throw new Exception("Docker Engine not installed in WSL. Run: curl -fsSL https://get.docker.com | sudo sh");
+
+            // Try to start native Docker daemon as root
+            var (_, startErr, startExit) = await RunWslDetailedAsync("-u root -- service docker start");
+            if (startExit != 0 && !string.IsNullOrWhiteSpace(startErr))
+                throw new Exception($"Could not start Docker daemon: {startErr.Split('\n')[0]}");
+
+            await Task.Delay(3000);
+
+            (idsRaw, idsErr, idsExit) = await RunWslDetailedAsync("docker ps -aq --no-trunc");
+            if (idsExit != 0 || (!string.IsNullOrWhiteSpace(idsErr) && string.IsNullOrWhiteSpace(idsRaw)))
+                throw new Exception("Docker daemon did not start in time. Retrying...");
+        }
+
+        if (string.IsNullOrWhiteSpace(idsRaw))
+            return new List<ContainerInfo>();
+
+        var ids = idsRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var (inspectJson, inspectErr, inspectExit) = await RunWslDetailedAsync($"docker inspect {string.Join(' ', ids)}");
+
+        if (inspectExit != 0 || !inspectJson.TrimStart().StartsWith('['))
+        {
+            var msg = string.IsNullOrWhiteSpace(inspectErr) ? "docker inspect failed" : inspectErr.Split('\n')[0];
+            throw new Exception(msg);
+        }
+
+        using var doc = JsonDocument.Parse(inspectJson);
+        var result = new List<ContainerInfo>();
+
+        foreach (var el in doc.RootElement.EnumerateArray())
+        {
+            var id = el.GetProperty("Id").GetString() ?? "";
+            var name = el.GetProperty("Name").GetString()?.TrimStart('/') ?? "unknown";
+
+            var labels = new Dictionary<string, string>();
+            if (el.TryGetProperty("Config", out var config) &&
+                config.TryGetProperty("Labels", out var labelsEl) &&
+                labelsEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var label in labelsEl.EnumerateObject())
+                    labels[label.Name] = label.Value.GetString() ?? "";
+            }
+
+            string project, service;
+            bool isStandalone;
+            if (labels.TryGetValue("com.docker.compose.project", out var composeProject) &&
+                labels.TryGetValue("com.docker.compose.service", out var composeService))
+            {
+                project = composeProject;
+                service = composeService;
+                isStandalone = false;
+            }
+            else
+            {
+                project = name;
+                service = name;
+                isStandalone = true;
+            }
+
+            var state = el.GetProperty("State");
+            var stateStatus = state.GetProperty("Status").GetString() ?? "unknown";
+            var isRunning = stateStatus == "running";
+            var status = FormatStatus(state);
+
+            var health = "none";
+            if (isRunning &&
+                state.TryGetProperty("Health", out var healthEl) &&
+                healthEl.ValueKind == JsonValueKind.Object &&
+                healthEl.TryGetProperty("Status", out var healthStatus))
+            {
+                health = healthStatus.GetString() ?? "none";
+            }
+
+            var image = config.TryGetProperty("Image", out var imageEl)
+                ? CleanImageName(imageEl.GetString() ?? "")
+                : "";
+
+            var ports = "";
+            if (el.TryGetProperty("NetworkSettings", out var ns) &&
+                ns.TryGetProperty("Ports", out var portsEl) &&
+                portsEl.ValueKind == JsonValueKind.Object)
+            {
+                var portMappings = new List<string>();
+                foreach (var portEntry in portsEl.EnumerateObject())
+                {
+                    if (portEntry.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var binding in portEntry.Value.EnumerateArray())
+                        {
+                            if (binding.TryGetProperty("HostPort", out var hp))
+                            {
+                                var containerPort = portEntry.Name.Split('/')[0];
+                                portMappings.Add($"{hp.GetString()}→{containerPort}");
+                            }
+                        }
+                    }
+                }
+                ports = string.Join(", ", portMappings.Take(2));
+                if (portMappings.Count > 2) ports += "...";
+            }
+
+            labels.TryGetValue("com.docker.compose.project.config_files", out var composeFile);
+            labels.TryGetValue("com.docker.compose.project.working_dir", out var workingDir);
+
+            result.Add(new ContainerInfo
+            {
+                Id = id,
+                Name = name,
+                Project = project,
+                Service = service,
+                Status = status,
+                Health = health,
+                Image = image,
+                Ports = ports,
+                IsRunning = isRunning,
+                IsStandalone = isStandalone,
+                ComposeFile = string.IsNullOrEmpty(composeFile) ? null : composeFile,
+                WorkingDir = string.IsNullOrEmpty(workingDir) ? null : workingDir
+            });
+        }
+
+        return result.OrderBy(c => c.Project).ThenBy(c => c.Service).ToList();
+    }
+
+    private static string FormatStatus(JsonElement state)
+    {
+        var status = state.GetProperty("Status").GetString() ?? "unknown";
+        try
+        {
+            return status switch
+            {
+                "running" => state.TryGetProperty("StartedAt", out var startedAt)
+                    ? $"Up {FormatDuration(DateTime.UtcNow - DateTime.Parse(startedAt.GetString()!).ToUniversalTime())}"
+                    : "Up",
+                "exited" => state.TryGetProperty("FinishedAt", out var finishedAt)
+                    ? $"Exited {FormatDuration(DateTime.UtcNow - DateTime.Parse(finishedAt.GetString()!).ToUniversalTime())} ago"
+                    : "Exited",
+                _ => status
+            };
+        }
+        catch
+        {
+            return status;
+        }
+    }
+
+    private static string FormatDuration(TimeSpan d)
+    {
+        if (d.TotalSeconds < 90) return $"{(int)d.TotalSeconds} seconds";
+        if (d.TotalMinutes < 90) return $"{(int)d.TotalMinutes} minutes";
+        if (d.TotalHours < 48) return $"{(int)d.TotalHours} hours";
+        if (d.TotalDays < 60) return $"{(int)d.TotalDays} days";
+        if (d.TotalDays < 548) return $"{(int)(d.TotalDays / 30)} months";
+        return $"{(int)(d.TotalDays / 365)} years";
+    }
+
+    private static string CleanImageName(string image)
+    {
+        if (image.Contains(':')) image = image.Split(':')[0];
+        if (image.Contains('@')) image = image.Split('@')[0];
+        if (image.Contains("docker"))
+            return image[image.IndexOf("docker")..];
+        if (image.Contains('/'))
+            return image.Split('/')[^1];
+        return image;
+    }
+
+    public async Task StopContainerAsync(string id) =>
+        await RunWslAsync($"docker stop --time 5 {id}");
+
+    public async Task StartContainerAsync(string id) =>
+        await RunWslAsync($"docker start {id}");
+
+    public async Task RestartContainerAsync(string id) =>
+        await RunWslAsync($"docker restart {id}");
+
+    public async Task DeleteContainerAsync(string id) =>
+        await RunWslAsync($"docker rm {id}");
+
+    public async Task<(double cpuPercent, double memoryMb, double memoryLimitMb, int cores)> GetTotalStatsAsync()
+    {
+        // Use JSON format - avoids bash interpreting special chars like |
+        var output = await RunWslAsync("docker stats --no-stream --format '{{json .}}'");
+        if (string.IsNullOrWhiteSpace(output)) return (0, 0, 0, 0);
+
+        double totalCpu = 0;
+        double totalMem = 0;
+        double totalLimit = 0;
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+
+                // CPUPerc: "12.34%"
+                if (root.TryGetProperty("CPUPerc", out var cpuEl))
+                {
+                    var cpuStr = cpuEl.GetString()?.TrimEnd('%') ?? "0";
+                    if (double.TryParse(cpuStr, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var cpu))
+                        totalCpu += cpu;
+                }
+
+                // MemUsage: "123.4MiB / 15.6GiB"
+                if (root.TryGetProperty("MemUsage", out var memEl))
+                {
+                    var memStr = memEl.GetString() ?? "";
+                    var parts = memStr.Split('/');
+                    if (parts.Length >= 1) totalMem += ParseMemory(parts[0].Trim());
+                    if (parts.Length >= 2) totalLimit = ParseMemory(parts[1].Trim());
+                }
+            }
+            catch { }
+        }
+
+        if (_cachedCores == 0)
+        {
+            var nprocStr = await RunWslAsync("nproc");
+            int.TryParse(nprocStr.Trim(), out _cachedCores);
+        }
+        return (totalCpu, totalMem, totalLimit, _cachedCores);
+    }
+
+    private static double ParseMemory(string s)
+    {
+        s = s.Trim();
+        if (s.EndsWith("GiB", StringComparison.OrdinalIgnoreCase))
+            return double.TryParse(s[..^3], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v * 1024 : 0;
+        if (s.EndsWith("MiB", StringComparison.OrdinalIgnoreCase))
+            return double.TryParse(s[..^3], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+        if (s.EndsWith("kB", StringComparison.OrdinalIgnoreCase) || s.EndsWith("KiB", StringComparison.OrdinalIgnoreCase))
+            return double.TryParse(s[..^2], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v / 1024 : 0;
+        return 0;
+    }
+
+    public async Task<(string installed, string candidate)> GetDockerVersionInfoAsync()
+    {
+        var output = await RunWslAsync("apt policy docker-ce 2>/dev/null");
+        var installed = "";
+        var candidate = "";
+        var versionRegex = new System.Text.RegularExpressions.Regex(@"(\d+\.\d+\.\d+)");
+        foreach (var line in output.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("Installed:"))
+            {
+                var m = versionRegex.Match(trimmed); if (m.Success) installed = m.Value;
+            }
+            else if (trimmed.StartsWith("Candidate:"))
+            {
+                var m = versionRegex.Match(trimmed); if (m.Success) candidate = m.Value;
+            }
+        }
+        return (installed, candidate);
+    }
+
+    public Process StartUpdateProcess()
+    {
+        var psi = new ProcessStartInfo("wsl", "-u root -- apt-get install --only-upgrade -y docker-ce docker-ce-cli containerd.io")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        return Process.Start(psi)!;
+    }
+
+    public async Task RecreateContainerAsync(ContainerInfo container)
+    {
+        if (!string.IsNullOrEmpty(container.ComposeFile))
+            await RunWslAsync($"docker compose -f \"{container.ComposeFile}\" up -d --force-recreate --no-deps {container.Service}");
+    }
+
+    public async Task<ContainerDetail> GetContainerDetailAsync(string id)
+    {
+        var (json, _, _) = await RunWslDetailedAsync($"docker inspect {id}");
+        using var doc = JsonDocument.Parse(json);
+        var el = doc.RootElement[0];
+
+        var name = el.GetProperty("Name").GetString()?.TrimStart('/') ?? id;
+
+        var config = el.GetProperty("Config");
+        var image = config.TryGetProperty("Image", out var imgEl) ? imgEl.GetString() ?? "" : "";
+
+        var created = "";
+        if (el.TryGetProperty("Created", out var createdEl) &&
+            DateTime.TryParse(createdEl.GetString(), out var createdDt))
+        {
+            var ago = FormatDuration(DateTime.UtcNow - createdDt.ToUniversalTime());
+            created = $"{ago} ago  ({createdDt.ToLocalTime():yyyy-MM-dd HH:mm})";
+        }
+
+        var status = FormatStatus(el.GetProperty("State"));
+
+        string? memLimit = null, cpuLimit = null;
+        if (el.TryGetProperty("HostConfig", out var hc))
+        {
+            if (hc.TryGetProperty("Memory", out var memEl) && memEl.GetInt64() > 0)
+                memLimit = FormatBytes(memEl.GetInt64());
+            if (hc.TryGetProperty("NanoCpus", out var cpuEl) && cpuEl.GetInt64() > 0)
+                cpuLimit = $"{cpuEl.GetInt64() / 1_000_000_000.0:F2} CPUs";
+        }
+
+        var mounts = new List<MountInfo>();
+        if (el.TryGetProperty("Mounts", out var mountsEl))
+            foreach (var m in mountsEl.EnumerateArray())
+            {
+                var src  = m.TryGetProperty("Source",      out var s)  ? s.GetString()  ?? "" : "";
+                var dst  = m.TryGetProperty("Destination", out var d)  ? d.GetString()  ?? "" : "";
+                var mode = m.TryGetProperty("RW",          out var rw) ? (rw.GetBoolean() ? "rw" : "ro") : "rw";
+                if (!string.IsNullOrEmpty(src) || !string.IsNullOrEmpty(dst))
+                    mounts.Add(new MountInfo(src, dst, mode));
+            }
+
+        var networks = new List<NetworkInfo>();
+        if (el.TryGetProperty("NetworkSettings", out var ns) &&
+            ns.TryGetProperty("Networks", out var netsEl))
+            foreach (var net in netsEl.EnumerateObject())
+            {
+                var ip = net.Value.TryGetProperty("IPAddress", out var ipEl) ? ipEl.GetString() ?? "" : "";
+                var gw = net.Value.TryGetProperty("Gateway",   out var gwEl) ? gwEl.GetString() ?? "" : "";
+                networks.Add(new NetworkInfo(net.Name, ip, gw));
+            }
+
+        var ports = new List<string>();
+        if (el.TryGetProperty("NetworkSettings", out var ns2) &&
+            ns2.TryGetProperty("Ports", out var portsEl) &&
+            portsEl.ValueKind == JsonValueKind.Object)
+            foreach (var portEntry in portsEl.EnumerateObject())
+                if (portEntry.Value.ValueKind == JsonValueKind.Array)
+                    foreach (var binding in portEntry.Value.EnumerateArray())
+                        if (binding.TryGetProperty("HostPort", out var hp))
+                        {
+                            var parts = portEntry.Name.Split('/');
+                            ports.Add($"{hp.GetString()} → {parts[0]}/{(parts.Length > 1 ? parts[1] : "tcp")}");
+                        }
+
+        return new ContainerDetail(id, name, image, created, status, memLimit, cpuLimit, mounts, networks, ports);
+    }
+
+    public async Task<ContainerStats?> GetContainerStatsDetailAsync(string id)
+    {
+        var output = await RunWslAsync($"docker stats --no-stream --format '{{{{json .}}}}' {id}");
+        if (string.IsNullOrWhiteSpace(output)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(output.Trim().Split('\n')[0]);
+            var r = doc.RootElement;
+            var netIo    = r.TryGetProperty("NetIO",    out var n) ? n.GetString() ?? "" : "";
+            var blockIo  = r.TryGetProperty("BlockIO",  out var b) ? b.GetString() ?? "" : "";
+            var netParts   = netIo.Split('/');
+            var blockParts = blockIo.Split('/');
+            var memRaw = r.TryGetProperty("MemUsage", out var mu) ? mu.GetString() ?? "" : "";
+            var memParts = memRaw.Split('/');
+            return new ContainerStats(
+                CpuPercent: r.TryGetProperty("CPUPerc", out var cpu)  ? cpu.GetString()  ?? "" : "",
+                MemUsage:   memParts.Length > 0 ? memParts[0].Trim() : "",
+                MemLimit:   memParts.Length > 1 ? memParts[1].Trim() : "",
+                MemPercent: r.TryGetProperty("MemPerc", out var mp)   ? mp.GetString()   ?? "" : "",
+                NetIn:      netParts.Length   > 0 ? netParts[0].Trim()   : "",
+                NetOut:     netParts.Length   > 1 ? netParts[1].Trim()   : "",
+                BlockIn:    blockParts.Length > 0 ? blockParts[0].Trim() : "",
+                BlockOut:   blockParts.Length > 1 ? blockParts[1].Trim() : "",
+                Pids:       r.TryGetProperty("PIDs", out var pids) ? pids.GetString() ?? "" : ""
+            );
+        }
+        catch { return null; }
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes >= 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024 * 1024):F1} GiB";
+        if (bytes >= 1024 * 1024)         return $"{bytes / (1024.0 * 1024):F0} MiB";
+        return $"{bytes / 1024.0:F0} KiB";
+    }
+
+    public Process StartLogsProcess(string id)    {
+        var psi = new ProcessStartInfo("wsl", $"docker logs -f --tail 20 {id}")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        return Process.Start(psi)!;
+    }
+}
