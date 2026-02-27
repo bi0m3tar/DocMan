@@ -9,7 +9,7 @@ class Program
 {
     static async Task Main(string[] args)
     {
-        var refreshInterval = 5; // seconds
+        var refreshInterval = 3; // seconds
         
         // Parse command line arguments
         for (int i = 0; i < args.Length; i++)
@@ -60,10 +60,17 @@ class Program
         var lastDockerVersionRefresh = DateTime.MinValue;
         var needsDockerVersionRender = false;
 
+        // Background refresh tasks (each runs independently so slow operations don't block container updates)
+        Task<(List<ContainerInfo> containers, DateTime fetchedAt)>? pendingContainerTask = null;
+        Task<(double cpu, double memMb, double limitMb, int cores)>? pendingStatsTask = null;
+        Task<(string installed, string candidate)>? pendingVersionTask = null;
+
         // Live log state
         var liveLogMode = false;
         var liveLogLines = new List<string>();
         var liveLogLabel = "";
+        var liveLogServiceKey = ""; // "{project}/{service}" — tracks the watched service across container recreations
+        var liveLogContainerId = "";
         Process? liveLogProcess = null;
         CancellationTokenSource? liveLogCts = null;
         var lastLiveLogRender = DateTime.MinValue;
@@ -72,6 +79,8 @@ class Program
         {
             StopLiveLogStream();
             liveLogLabel = $"{container.Project} / {container.Service}";
+            liveLogServiceKey = $"{container.Project}/{container.Service}";
+            liveLogContainerId = container.Id;
             lock (liveLogLines) { liveLogLines.Clear(); }
             liveLogCts = new CancellationTokenSource();
             var token = liveLogCts.Token;
@@ -158,96 +167,127 @@ class Program
             liveLogProcess?.Dispose();
             liveLogProcess = null;
             liveLogCts = null;
+            liveLogServiceKey = "";
+            liveLogContainerId = "";
         }
 
         try
         {
             while (true)
             {
-                // Refresh container list
-                if ((DateTime.Now - lastRefresh).TotalSeconds >= refreshInterval)
+                // Container refresh — fast, runs every refreshInterval
+                if (pendingContainerTask == null && (DateTime.Now - lastRefresh).TotalSeconds >= refreshInterval)
+                {
+                    pendingContainerTask = Task.Run(async () =>
+                    {
+                        var c = await dockerService.GetContainersAsync();
+                        return (c, DateTime.Now);
+                    });
+                }
+
+                if (pendingContainerTask != null && pendingContainerTask.IsCompleted)
                 {
                     try
                     {
-                        containers = await dockerService.GetContainersAsync();
-                        
-                        // Build display rows with ALL containers (so project rows have all containers)
-                        // Then filter the display if needed
-                        var allDisplayRows = containerListView.BuildDisplayRows(containers);
-                        
-                        var newDisplayRows = showOnlyRunning 
-                            ? allDisplayRows.Where(r =>
-                                (r.IsProjectRow && r.ProjectContainers.Any(c => c.IsRunning)) ||
-                                (!r.IsProjectRow && r.Container != null && r.Container.IsRunning)).ToList()
-                            : allDisplayRows;
-                            
-                        lastRefresh = DateTime.Now;
-
-                        // Only re-render if container data actually changed
-                        var newFingerprint = string.Join("|", newDisplayRows
-                            .Where(r => r.Container != null)
-                            .Select(r => $"{r.Container!.Id}:{r.Container.Status}:{r.Container.Health}:{r.Container.Ports}"));
-                        if (newFingerprint != lastContainerFingerprint)
+                        if (pendingContainerTask.IsCompletedSuccessfully)
                         {
-                            displayRows = newDisplayRows;
-                            lastContainerFingerprint = newFingerprint;
-                            needsRender = true;
-                        }
+                            var (newContainers, fetchedAt) = pendingContainerTask.Result;
+                            containers = newContainers;
+                            lastRefresh = fetchedAt;
 
-                        // Refresh stats every 10 seconds (docker stats is slow)
-                        if ((DateTime.Now - lastStatsRefresh).TotalSeconds >= 10)
-                        {
-                            try
+                            var allDisplayRows = containerListView.BuildDisplayRows(containers);
+                            var newDisplayRows = showOnlyRunning
+                                ? allDisplayRows.Where(row =>
+                                    (row.IsProjectRow && row.ProjectContainers.Any(c => c.IsRunning)) ||
+                                    (!row.IsProjectRow && row.Container != null && row.Container.IsRunning)).ToList()
+                                : allDisplayRows;
+
+                            var newFingerprint = string.Join("|", newDisplayRows
+                                .Where(row => row.Container != null)
+                                .Select(row => $"{row.Container!.Id}:{row.Container.Status}:{row.Container.Health}:{row.Container.Ports}"));
+                            if (newFingerprint != lastContainerFingerprint)
                             {
-                                var newStats = await dockerService.GetTotalStatsAsync();
-                                var wasReady = statsReady;
-                                statsReady = true;
-                                if (newStats != lastStats || !wasReady)
+                                displayRows = newDisplayRows;
+                                lastContainerFingerprint = newFingerprint;
+                                needsRender = true;
+
+                                // Re-attach live log if the tracked service was recreated (new container ID).
+                                // Uses service key rather than selectedIndex so index drift during recreation doesn't break it.
+                                if (liveLogMode && !string.IsNullOrEmpty(liveLogServiceKey))
                                 {
-                                    stats = newStats;
-                                    lastStats = newStats;
-                                    needsStatsRender = true;
+                                    var trackedRow = displayRows.FirstOrDefault(r => !r.IsProjectRow && r.Container != null &&
+                                        $"{r.Container.Project}/{r.Container.Service}" == liveLogServiceKey);
+                                    if (trackedRow?.Container != null && trackedRow.Container.Id != liveLogContainerId)
+                                        StartLiveLogStream(trackedRow.Container);
                                 }
                             }
-                            catch { }
-                            lastStatsRefresh = DateTime.Now;
-                        }
 
-                        // Refresh docker version every 60 seconds
-                        if ((DateTime.Now - lastDockerVersionRefresh).TotalSeconds >= 60)
-                        {
-                            try
-                            {
-                                var (inst, cand) = await dockerService.GetDockerVersionInfoAsync();
-                                if (inst != dockerInstalled || cand != dockerCandidate || !dockerVersionReady)
-                                {
-                                    dockerInstalled = inst;
-                                    dockerCandidate = cand;
-                                    dockerVersionReady = true;
-                                    needsDockerVersionRender = true;
-                                }
-                                else { dockerVersionReady = true; }
-                            }
-                            catch { dockerVersionReady = true; }
-                            lastDockerVersionRefresh = DateTime.Now;
+                            if (selectedIndex >= displayRows.Count && displayRows.Count > 0)
+                                selectedIndex = displayRows.Count - 1;
+                            markedIndices.RemoveWhere(i => i >= displayRows.Count);
                         }
-
-                        // Adjust selection if out of bounds
-                        if (selectedIndex >= displayRows.Count && displayRows.Count > 0)
+                        else if (pendingContainerTask.IsFaulted)
                         {
-                            selectedIndex = displayRows.Count - 1;
+                            var ex = pendingContainerTask.Exception?.InnerException ?? pendingContainerTask.Exception;
+                            Screen.SetCursorPosition(0, 2);
+                            Screen.WriteLine($"  {ex?.Message}".PadRight(80), ConsoleColor.Yellow);
+                            lastRefresh = DateTime.Now; // back off before retry
                         }
-                        
-                        // Clean up marked indices
-                        markedIndices.RemoveWhere(i => i >= displayRows.Count);
                     }
-                    catch (Exception ex)
+                    finally { pendingContainerTask = null; }
+                }
+
+                // Stats refresh — slow (docker stats --no-stream), runs every 10 s
+                if (pendingStatsTask == null && (DateTime.Now - lastStatsRefresh).TotalSeconds >= 10)
+                {
+                    pendingStatsTask = Task.Run(() => dockerService.GetTotalStatsAsync());
+                }
+
+                if (pendingStatsTask != null && pendingStatsTask.IsCompleted)
+                {
+                    try
                     {
-                        Screen.SetCursorPosition(0, 2);
-                        Screen.WriteLine($"  {ex.Message}".PadRight(80), ConsoleColor.Yellow);
-                        await Task.Delay(1000);
-                        continue;
+                        if (pendingStatsTask.IsCompletedSuccessfully)
+                        {
+                            var newStats = pendingStatsTask.Result;
+                            var wasReady = statsReady;
+                            statsReady = true;
+                            if (newStats != lastStats || !wasReady)
+                            {
+                                stats = newStats;
+                                lastStats = newStats;
+                                needsStatsRender = true;
+                            }
+                        }
+                        else { statsReady = true; }
                     }
+                    finally { pendingStatsTask = null; lastStatsRefresh = DateTime.Now; }
+                }
+
+                // Docker version refresh — potentially very slow (apt policy), runs every 60 s
+                if (pendingVersionTask == null && (DateTime.Now - lastDockerVersionRefresh).TotalSeconds >= 60)
+                {
+                    pendingVersionTask = Task.Run(() => dockerService.GetDockerVersionInfoAsync());
+                }
+
+                if (pendingVersionTask != null && pendingVersionTask.IsCompleted)
+                {
+                    try
+                    {
+                        if (pendingVersionTask.IsCompletedSuccessfully)
+                        {
+                            var (inst, cand) = pendingVersionTask.Result;
+                            if (inst != dockerInstalled || cand != dockerCandidate || !dockerVersionReady)
+                            {
+                                dockerInstalled = inst;
+                                dockerCandidate = cand;
+                                needsDockerVersionRender = true;
+                            }
+                            dockerVersionReady = true;
+                        }
+                        else { dockerVersionReady = true; }
+                    }
+                    finally { pendingVersionTask = null; lastDockerVersionRefresh = DateTime.Now; }
                 }
 
                 // Render UI only when something changed
@@ -505,6 +545,17 @@ class Program
                 // Refresh live log panel independently of container list refresh
                 if (liveLogMode && (DateTime.Now - lastLiveLogRender).TotalMilliseconds >= 200)
                 {
+                    // If the stream process died (container removed/recreated), re-attach as soon as the
+                    // tracked service is running again — without waiting for the user to move the selection.
+                    if (!string.IsNullOrEmpty(liveLogServiceKey) && liveLogProcess != null && liveLogProcess.HasExited)
+                    {
+                        var restartRow = displayRows.FirstOrDefault(r => !r.IsProjectRow && r.Container != null &&
+                            $"{r.Container.Project}/{r.Container.Service}" == liveLogServiceKey &&
+                            r.Container.IsRunning);
+                        if (restartRow?.Container != null)
+                            StartLiveLogStream(restartRow.Container);
+                    }
+
                     List<string> snapshot;
                     lock (liveLogLines) { snapshot = liveLogLines.TakeLast(ContainerListView.LogPanelLines).ToList(); }
                     containerListView.RenderLiveLogPanel(snapshot, liveLogLabel);
@@ -520,3 +571,4 @@ class Program
         }
     }
 }
+

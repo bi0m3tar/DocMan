@@ -2,7 +2,7 @@
 # Usage: .\run.ps1 [-Interval 5]
 
 param(
-    [int]$Interval = 5
+    [int]$Interval = 3
 )
 
 Set-Location $PSScriptRoot

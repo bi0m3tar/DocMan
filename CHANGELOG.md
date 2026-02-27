@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.0.9] - 2026-02-27
+
+### Changed
+
+- Default container list refresh interval reduced from 5 s to 3 s.
+- Container list, stats, and Docker version checks now run as three independent background tasks. Slow operations (`docker stats`, `apt policy docker-ce`) no longer delay the container list from appearing — startup is fast regardless of apt cache state.
+
+### Fixed
+
+- Live log panel (inspect mode) now automatically re-attaches to the replacement container when a build script disposes and recreates a container, instead of going silent until the user moves the selection. The tracked service is matched by project/service name rather than container ID, so index drift during the recreation window no longer causes the wrong container to be streamed.
+
+---
+
 ## [1.0.8] - 2026-02-25
 
 ### Fixed
