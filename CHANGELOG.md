@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.0] - 2026-02-27
+
+### Removed
+
+- `-Interval` command-line flag. The refresh interval is now fixed at 3 s.
+
+---
+
 ## [1.0.9] - 2026-02-27
 
 ### Changed
@@ -52,4 +60,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Version bar — shows installed docker-ce version vs latest available, highlighted red when an update is ready
 - Resource bar — total CPU %, memory usage, and core count across all running containers
 - Startup checks — validates WSL is installed, can start, and that Docker is available before UI loads
-- `-Interval` flag to configure the container list refresh interval (default 5 s)
+- `-Interval` flag to configure the container list refresh interval (default 5 s) — removed in 1.0.9

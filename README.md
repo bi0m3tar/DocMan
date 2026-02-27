@@ -38,12 +38,6 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 .\publish\DocMan.exe
 ```
 
-### Optional: adjust the refresh interval (default 5 seconds)
-
-```powershell
-.\DocMan.exe -Interval 3
-```
-
 ---
 
 ## Features
@@ -91,8 +85,8 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | Restart | Restart selected container(s) |
 | Recreate | `docker compose up --force-recreate` (compose containers only) |
 | Delete | Remove selected container(s) |
-| Inspect | View last 20 lines of logs |
-| Info | Detailed container info + live resource stats |
+| Inspect | View last 20 lines of logs (individual containers only) |
+| Info | Detailed container info + live resource stats (individual containers only) |
 | Terminal | Open interactive shell (running containers only) |
 
 Press `C` or `Esc` to dismiss the menu without taking action.
@@ -102,7 +96,7 @@ Press `C` or `Esc` to dismiss the menu without taking action.
 ## Display
 
 ```
-DocMan - DOcker Container MANager  v1.0.7
+DocMan - DOcker Container MANager  v1.1.0
 ↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions
 P:Start All │ S:Stop All │ D:Delete All │ I:Inspect │ R:Toggle Running │ U:Update Docker │ W:Restart WSL/Docker │ Q:Quit
 ──────────────────────────────────────────────────────────────────────────────────────────────────────

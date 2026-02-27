@@ -10,15 +10,6 @@ class Program
     static async Task Main(string[] args)
     {
         var refreshInterval = 3; // seconds
-        
-        // Parse command line arguments
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (args[i] == "-Interval" && i + 1 < args.Length)
-            {
-                int.TryParse(args[i + 1], out refreshInterval);
-            }
-        }
 
         var prereqError = await DockerService.CheckPrerequisitesAsync();
         if (prereqError != null)
