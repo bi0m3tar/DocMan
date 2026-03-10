@@ -143,12 +143,6 @@ DocMan/
 
 ---
 
-## Why not Docker Desktop?
-
-Docker Desktop is a 700 MB+ GUI application. DocMan is a ~3 MB self-contained executable that talks directly to Docker Engine in WSL. It starts instantly, uses ~18 MB RAM, and stays out of the way.
-
----
-
 ## License
 
 MIT

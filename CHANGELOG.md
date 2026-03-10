@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.1] - 2026-03-09
+
+### Fixed
+
+- The Delete function was not working properly from the Container Actions menu because the container(s) was not stopped before deletion.
+
+---
+
 ## [1.1.0] - 2026-02-27
 
 ### Removed

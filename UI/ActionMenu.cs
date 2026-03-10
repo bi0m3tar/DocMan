@@ -219,9 +219,90 @@ public class ActionMenu
                 }
                 break;
             case 5: // Delete
-                await ExecuteActionAsync(selectedContainers, "Deleting", c => _dockerService.DeleteContainerAsync(c.Id));
+                await DeleteContainersAsync(selectedContainers);
                 break;
         }
+    }
+
+    private async Task DeleteContainersAsync(List<ContainerInfo> containers)
+    {
+        var runningContainers = containers.Where(c => c.IsRunning).ToList();
+        var overlay = new Overlay(6, 80, 20);
+        var statusLines = new List<string>
+        {
+            "",
+            runningContainers.Count > 0
+                ? $"Stopping and deleting {containers.Count} container(s)..."
+                : $"Deleting {containers.Count} container(s)...",
+            "",
+            "ESC/Enter to close (operations continue in background)"
+        };
+
+        overlay.Show("Delete", statusLines);
+
+        int completed = 0;
+        var operationsTask = Task.Run(async () =>
+        {
+            foreach (var container in runningContainers)
+            {
+                try
+                {
+                    statusLines[1] = $"Stopping {runningContainers.Count} container(s)... ({completed}/{runningContainers.Count})";
+                    await _dockerService.StopContainerAsync(container.Id);
+                    statusLines.Add($"⏹ {container.Service}: stopped");
+                    completed++;
+                }
+                catch (Exception ex)
+                {
+                    statusLines.Add($"✗ {container.Service}: stop failed - {ex.Message}");
+                    completed++;
+                }
+            }
+
+            completed = 0;
+            statusLines[1] = $"Deleting {containers.Count} container(s)...";
+            foreach (var container in containers)
+            {
+                try
+                {
+                    statusLines[1] = $"Deleting {containers.Count} container(s)... ({completed}/{containers.Count})";
+                    await _dockerService.DeleteContainerAsync(container.Id);
+                    statusLines.Add($"✓ {container.Service}: deleted");
+                    completed++;
+                }
+                catch (Exception ex)
+                {
+                    statusLines.Add($"✗ {container.Service}: delete failed - {ex.Message}");
+                    completed++;
+                }
+            }
+        });
+
+        while (!operationsTask.IsCompleted)
+        {
+            if (Console.KeyAvailable)
+            {
+                var key = Console.ReadKey(true);
+                if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.Enter)
+                {
+                    overlay.Hide();
+                    _ = operationsTask;
+                    return;
+                }
+            }
+            overlay.Update(statusLines.ToList());
+            await Task.Delay(100);
+        }
+
+        await operationsTask;
+
+        statusLines[1] = $"Completed: {completed}/{containers.Count}";
+        statusLines.Add("");
+        statusLines.Add("Press any key to close...");
+        overlay.Update(statusLines);
+
+        Console.ReadKey(true);
+        overlay.Hide();
     }
 
     private async Task ExecuteActionAsync(List<ContainerInfo> containers, string action, Func<ContainerInfo, Task> operation)
