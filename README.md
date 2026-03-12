@@ -6,6 +6,16 @@ A lightweight, keyboard-driven terminal UI for managing Docker containers runnin
 
 ---
 
+## Dependencies
+
+DocMan has **zero external (NuGet) dependencies**. It is built entirely on the .NET 10.0 base class library:
+
+- `System.Console` — terminal rendering and keyboard input
+- `System.Diagnostics.Process` — spawning `wsl` / `docker` subprocesses
+- `System.Threading.Tasks` — async background refresh tasks
+
+No third-party packages are required.
+
 ## Requirements
 
 - Windows 10 / 11
@@ -13,7 +23,7 @@ A lightweight, keyboard-driven terminal UI for managing Docker containers runnin
 - Docker Engine installed **inside WSL** (not Docker Desktop)
 
 ```bash
-# Install Docker Engine in WSL
+# Install Docker Engine in WSL (if not already installed)
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
@@ -46,14 +56,17 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - **Multi-select** — mark individual containers or whole projects with `Space`
 - **Batch operations** — start, stop, or delete all marked items at once
 - **Global actions** — start all / stop all / delete all without selecting anything
-- **Live log tail** — real-time log panel pinned to the bottom of the screen (`I`)
-- **Container Info** — detailed view with image, volumes, network settings, CPU, memory, net/disk I/O, and PID count (auto-refreshes every 2 s)
-- **Log inspector** — last 20 lines of container logs
+- **Live log tail** — real-time log panel pinned to the bottom of the screen (`L`)
+- **Fullscreen live logs** — fullscreen streaming log view (`Shift+L` or via action menu)
+- **Container Info** — scrollable detailed view with image, volumes, network settings, resource usage, and environment variables (auto-refreshes every 2 s)
+- **Project Info** — shows compose file path, services summary, and the full `docker-compose.yml` content with YAML syntax highlighting (scrollable)
 - **Terminal access** — open an interactive shell inside any running container
-- **Docker Engine update** — upgrade docker-ce in WSL without leaving the app (`U`)
+- **Kill** — send SIGKILL to a container without a graceful stop
+- **Docker Engine update** — upgrade docker-ce in WSL without leaving the app (`U`); notified automatically at startup when an update is available
 - **WSL restart** — shut down and restart WSL (`W`)
 - **Version bar** — shows installed docker-ce version vs latest available, highlighted in red when an update is ready
 - **Resource bar** — total CPU %, memory usage, and core count across all running containers
+- **Help page** — full keyboard shortcut reference (`H`)
 - **Startup checks** — validates WSL is installed, can start, and that Docker is available before the UI loads
 
 ---
@@ -67,16 +80,32 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | `↑` / `↓` | Navigate the container list |
 | `Space` | Mark / unmark container or project (marking a project marks all its services) |
 | `Enter` | Open action menu for selected / marked items |
+| `L` | Toggle live log tail panel for highlighted container |
 | `P` | Start all stopped containers |
 | `S` | Stop all running containers |
 | `D` | Delete all containers (with confirmation) |
-| `I` | Toggle live log tail panel |
 | `R` | Toggle running-only filter |
+| `N` | Prune all unused Docker images |
 | `U` | Update Docker Engine in WSL (apt upgrade) |
 | `W` | Restart WSL |
+| `H` | Show keyboard shortcut help |
 | `Q` | Quit |
 
-### Action menu (Enter)
+### Shift hotkeys — act on highlighted container / project
+
+| Key | Action |
+|-----|--------|
+| `Shift+L` | Fullscreen live logs |
+| `Shift+I` | Fullscreen info |
+| `Shift+T` | Open terminal (running containers only) |
+| `Shift+P` | Start |
+| `Shift+S` | Stop |
+| `Shift+K` | Kill |
+| `Shift+R` | Restart |
+| `Shift+U` | Recreate |
+| `Shift+D` | Delete (with confirmation) |
+
+### Action menu (`Enter`)
 
 | Option | Description |
 |--------|-------------|
@@ -84,25 +113,35 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | Stop | Stop selected container(s) |
 | Restart | Restart selected container(s) |
 | Recreate | `docker compose up --force-recreate` (compose containers only) |
+| Kill | Send SIGKILL to selected container(s) |
 | Delete | Remove selected container(s) |
-| Inspect | View last 20 lines of logs (individual containers only) |
-| Info | Detailed container info + live resource stats (individual containers only) |
+| Live Logs | Fullscreen streaming log view (individual containers only) |
+| Info | Detailed container or project info (scrollable) |
 | Terminal | Open interactive shell (running containers only) |
 
 Press `C` or `Esc` to dismiss the menu without taking action.
+
+### Info / Project Info views
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Scroll one line |
+| `PgUp` / `PgDn` | Scroll one screen |
+| `Home` / `End` | Jump to top / bottom |
+| `Enter` / `Esc` | Close |
 
 ---
 
 ## Display
 
 ```
-DocMan - DOcker Container MANager  v1.1.0
+DocMan - DOcker Container MANager  v1.1.2
 ↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions
-P:Start All │ S:Stop All │ D:Delete All │ I:Inspect │ R:Toggle Running │ U:Update Docker │ W:Restart WSL/Docker │ Q:Quit
+P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ W:Restart WSL │ H:Help │ Q:Quit
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
  M   NAME                                      ID             IMAGE            PORTS          STATUS
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
-[ ]  myapi                                                                                            
+[ ]  myapi
 [ ]    db                                      a1b2c3d4e5f6   postgres         5432→5432      Up 2 hours
 [ ]    web                                     f6e5d4c3b2a1   nginx            8080→80        Up 2 hours
 [ ]  standalone-redis                          1122334455aa   redis            6379→6379      Exited 5 min ago
@@ -131,8 +170,10 @@ DocMan/
 │   ├── Screen.cs               # Console helpers + VT processing + scroll region
 │   ├── ContainerListView.cs    # Main list renderer
 │   ├── ActionMenu.cs           # Per-container action overlay
-│   ├── InfoViewer.cs           # Detailed container info + live stats
-│   ├── LogViewer.cs            # Log inspector
+│   ├── InfoViewer.cs           # Scrollable container info + live stats
+│   ├── ProjectInfoViewer.cs    # Scrollable project info + compose file viewer
+│   ├── LogViewer.cs            # Fullscreen log inspector
+│   ├── HelpViewer.cs           # Keyboard shortcut reference
 │   ├── Overlay.cs              # Generic overlay box
 │   └── (terminal in Program.cs)
 ├── Utilities/

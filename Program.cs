@@ -50,6 +50,8 @@ class Program
         var dockerVersionReady = false;
         var lastDockerVersionRefresh = DateTime.MinValue;
         var needsDockerVersionRender = false;
+        var updatePromptShown = false;  // show at most once per session
+        var showUpdatePrompt  = false;  // set when version task finds an available update
 
         // Background refresh tasks (each runs independently so slow operations don't block container updates)
         Task<(List<ContainerInfo> containers, DateTime fetchedAt)>? pendingContainerTask = null;
@@ -160,6 +162,46 @@ class Program
             liveLogCts = null;
             liveLogServiceKey = "";
             liveLogContainerId = "";
+        }
+
+        async Task RunDockerUpdateAsync()
+        {
+            var uOverlay = new Overlay(6, 82, 24);
+            var uLines = new List<string> { "", "Running: apt-get install --only-upgrade docker-ce ...", "", "ESC/Enter to dismiss (update continues in background)" };
+            uOverlay.Show("Update Docker", uLines);
+            var uProc = dockerService.StartUpdateProcess();
+            var uDone = uProc.WaitForExitAsync();
+            var uEarly = false;
+            _ = Task.Run(async () =>
+            {
+                var t1 = Task.Run(async () => { while (!uProc.StandardOutput.EndOfStream) { var l = await uProc.StandardOutput.ReadLineAsync(); if (l != null) lock (uLines) { uLines.Add(l.Length > 77 ? l[..77] : l); } } });
+                var t2 = Task.Run(async () => { while (!uProc.StandardError.EndOfStream) { var l = await uProc.StandardError.ReadLineAsync(); if (l != null) lock (uLines) { uLines.Add(l.Length > 77 ? l[..77] : l); } } });
+                await Task.WhenAll(t1, t2);
+            });
+            while (!uDone.IsCompleted)
+            {
+                if (Console.KeyAvailable) { var k = Console.ReadKey(true); if (k.Key == ConsoleKey.Escape || k.Key == ConsoleKey.Enter) { uEarly = true; uOverlay.Hide(); break; } }
+                List<string> uSnap; lock (uLines) { uSnap = new List<string>(uLines); }
+                uOverlay.Update(uSnap);
+                await Task.Delay(150);
+            }
+            if (!uEarly)
+            {
+                await uDone;
+                // Replace content with a clean result screen so the status is always visible
+                var resultLines = new List<string>
+                {
+                    "",
+                    uProc.ExitCode == 0 ? "  ✓ Update complete!" : $"  ✗ Update failed (exit code {uProc.ExitCode})",
+                    "",
+                    "  Press any key to close..."
+                };
+                uOverlay.Update(resultLines); Console.ReadKey(true); uOverlay.Hide();
+            }
+            uProc.Dispose();
+            lastDockerVersionRefresh = DateTime.MinValue;
+            containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+            needsRender = false; lastRefresh = DateTime.MinValue;
         }
 
         try
@@ -275,6 +317,13 @@ class Program
                                 needsDockerVersionRender = true;
                             }
                             dockerVersionReady = true;
+
+                            // Trigger one-time upgrade prompt if an update is available
+                            if (!updatePromptShown && !string.IsNullOrEmpty(inst) && !string.IsNullOrEmpty(cand))
+                            {
+                                try { if (Version.Parse(cand) > Version.Parse(inst)) showUpdatePrompt = true; }
+                                catch { }
+                            }
                         }
                         else { dockerVersionReady = true; }
                     }
@@ -298,6 +347,31 @@ class Program
                 {
                     containerListView.RenderDockerVersion(dockerInstalled, dockerCandidate, dockerVersionReady);
                     needsDockerVersionRender = false;
+                }
+
+                // One-time update available prompt (fires after version check, no startup lag)
+                if (showUpdatePrompt)
+                {
+                    showUpdatePrompt  = false;
+                    updatePromptShown = true;
+                    var promptOv = new Overlay(6, 72, 11);
+                    var promptLines = new List<string>
+                    {
+                        "",
+                        "  A Docker update is available!",
+                        "",
+                        $"    Installed : {dockerInstalled}",
+                        $"    Available : {dockerCandidate}",
+                        "",
+                        "  Press U to upgrade now, or any other key to dismiss."
+                    };
+                    promptOv.Show("Docker Update Available", promptLines);
+                    var promptKey = Console.ReadKey(true);
+                    promptOv.Hide();
+                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                    needsRender = false;
+                    if (promptKey.Key == ConsoleKey.U)
+                        await RunDockerUpdateAsync();
                 }
 
                 // Handle input
@@ -395,11 +469,46 @@ class Program
                                 break;
 
                             case ConsoleKey.R:
-                                // Toggle show only running containers
-                                showOnlyRunning = !showOnlyRunning;
-                                lastRefresh = DateTime.MinValue;
-                                selectedIndex = 0;
-                                markedIndices.Clear();
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                                {
+                                    // Shift+R: Restart highlighted container or project
+                                    var rRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(2, rRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
+                                else
+                                {
+                                    // Toggle show only running containers
+                                    showOnlyRunning = !showOnlyRunning;
+                                    lastRefresh = DateTime.MinValue;
+                                    selectedIndex = 0;
+                                    markedIndices.Clear();
+                                }
+                                break;
+
+                            case ConsoleKey.N: // Prune all unused images
+                                var nOv = new Overlay(6, 80, Screen.Height - 8);
+                                var nLn = new List<string> { "", "Pruning all unused Docker images...", "", "ESC/Enter to close" };
+                                nOv.Show("Prune All", nLn);
+                                var nTask = dockerService.PruneImagesAsync();
+                                while (!nTask.IsCompleted)
+                                {
+                                    if (Console.KeyAvailable) { var k = Console.ReadKey(true); if (k.Key == ConsoleKey.Escape || k.Key == ConsoleKey.Enter) { nOv.Hide(); break; } }
+                                    nOv.Update(nLn);
+                                    await Task.Delay(100);
+                                }
+                                if (nTask.IsCompletedSuccessfully)
+                                {
+                                    nLn.RemoveAt(3); // remove "ESC/Enter to close" placeholder
+                                    nLn.Add("");
+                                    nLn.AddRange(nTask.Result);
+                                    nLn.Add("");
+                                    nLn.Add("Press any key to close...");
+                                    nOv.Update(nLn); Console.ReadKey(true); nOv.Hide();
+                                }
+                                containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                needsRender = false; lastRefresh = DateTime.MinValue;
                                 break;
 
                             case ConsoleKey.W:
@@ -410,92 +519,177 @@ class Program
                                 break;
 
                             case ConsoleKey.I:
-                                liveLogMode = !liveLogMode;
-                                if (liveLogMode)
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
                                 {
-                                    var iRow = displayRows[selectedIndex];
-                                    if (!iRow.IsProjectRow && iRow.Container != null) StartLiveLogStream(iRow.Container);
-                                    else lock (liveLogLines) { liveLogLines.Clear(); }
+                                    // Shift+I: Fullscreen info for highlighted container or project
+                                    var iiRow = displayRows[selectedIndex];
+                                    if (iiRow.IsProjectRow)
+                                    {
+                                        var projectViewer = new ProjectInfoViewer(dockerService);
+                                        await projectViewer.ShowAsync(iiRow.Project, iiRow.ProjectContainers);
+                                    }
+                                    else if (iiRow.Container != null)
+                                    {
+                                        var infoViewer = new InfoViewer(dockerService);
+                                        await infoViewer.ShowAsync(iiRow.Container);
+                                    }
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
                                 }
-                                else { StopLiveLogStream(); }
+                                break;
+
+                            case ConsoleKey.L:
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                                {
+                                    // Shift+L: Fullscreen live logs for highlighted container
+                                    var llRow = displayRows[selectedIndex];
+                                    if (!llRow.IsProjectRow && llRow.Container != null)
+                                    {
+                                        var logViewer = new LogViewer(dockerService);
+                                        await logViewer.ShowAsync(llRow.Container);
+                                        containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                        needsRender = false; lastRefresh = DateTime.MinValue;
+                                    }
+                                }
+                                else
+                                {
+                                    // L: Toggle live log panel
+                                    liveLogMode = !liveLogMode;
+                                    if (liveLogMode)
+                                    {
+                                        var lRow = displayRows[selectedIndex];
+                                        if (!lRow.IsProjectRow && lRow.Container != null) StartLiveLogStream(lRow.Container);
+                                        else lock (liveLogLines) { liveLogLines.Clear(); }
+                                    }
+                                    else { StopLiveLogStream(); }
+                                }
+                                break;
+
+                            case ConsoleKey.T:
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                                {
+                                    // Shift+T: Terminal for highlighted container
+                                    var tRow = displayRows[selectedIndex];
+                                    if (!tRow.IsProjectRow && tRow.Container != null && tRow.Container.IsRunning)
+                                    {
+                                        await OpenTerminalAsync(tRow.Container);
+                                        lastRefresh = DateTime.MinValue;
+                                        needsRender = true;
+                                    }
+                                }
+                                break;
+
+                            case ConsoleKey.K:
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                                {
+                                    // Shift+K: Kill highlighted container or project
+                                    var kRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(6, kRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
+                                break;
+
+                            case ConsoleKey.H:
+                                StopLiveLogStream();
+                                liveLogMode = false;
+                                await HelpViewer.ShowAsync();
+                                containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                needsRender = false;
                                 break;
 
                             case ConsoleKey.U:
-                                var uOverlay = new Overlay(6, 82, 24);
-                                var uLines = new List<string> { "", "Update Docker Engine in WSL", "", "Press Y to confirm, any other key to cancel" };
-                                uOverlay.Show("Update Docker", uLines);
-                                var uConfirm = Console.ReadKey(true);
-                                if (uConfirm.Key != ConsoleKey.Y) { uOverlay.Hide(); break; }
-                                uLines = new List<string> { "", "Running: apt-get install --only-upgrade docker-ce ...", "", "ESC/Enter to dismiss (update continues in background)" };
-                                uOverlay.Show("Update Docker", uLines);
-                                var uProc = dockerService.StartUpdateProcess();
-                                var uDone = uProc.WaitForExitAsync();
-                                var uEarly = false;
-                                _ = Task.Run(async () =>
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
                                 {
-                                    var t1 = Task.Run(async () => { while (!uProc.StandardOutput.EndOfStream) { var l = await uProc.StandardOutput.ReadLineAsync(); if (l != null) lock (uLines) { uLines.Add(l.Length > 77 ? l[..77] : l); } } });
-                                    var t2 = Task.Run(async () => { while (!uProc.StandardError.EndOfStream) { var l = await uProc.StandardError.ReadLineAsync(); if (l != null) lock (uLines) { uLines.Add(l.Length > 77 ? l[..77] : l); } } });
-                                    await Task.WhenAll(t1, t2);
-                                });
-                                while (!uDone.IsCompleted)
-                                {
-                                    if (Console.KeyAvailable) { var k = Console.ReadKey(true); if (k.Key == ConsoleKey.Escape || k.Key == ConsoleKey.Enter) { uEarly = true; uOverlay.Hide(); break; } }
-                                    List<string> uSnap; lock (uLines) { uSnap = new List<string>(uLines); }
-                                    uOverlay.Update(uSnap);
-                                    await Task.Delay(150);
+                                    // Shift+U: Recreate highlighted container or project
+                                    var uRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(3, uRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
                                 }
-                                if (!uEarly)
+                                else
                                 {
-                                    await uDone;
-                                    List<string> uFinal; lock (uLines) { uFinal = new List<string>(uLines); }
-                                    uFinal.Add(""); uFinal.Add(uProc.ExitCode == 0 ? "✓ Update complete" : $"✗ Failed (exit {uProc.ExitCode})");
-                                    uFinal.Add(""); uFinal.Add("Press any key to close...");
-                                    uOverlay.Update(uFinal); Console.ReadKey(true); uOverlay.Hide();
+                                    var uConfOv = new Overlay(6, 82, 8);
+                                    uConfOv.Show("Update Docker", new List<string> { "", "Update Docker Engine in WSL", "", "Press Y to confirm, any other key to cancel" });
+                                    var uConfirm = Console.ReadKey(true);
+                                    uConfOv.Hide();
+                                    if (uConfirm.Key == ConsoleKey.Y)
+                                        await RunDockerUpdateAsync();
+                                    else
+                                    {
+                                        containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                        needsRender = false;
+                                    }
                                 }
-                                uProc.Dispose();
-                                lastDockerVersionRefresh = DateTime.MinValue;
-                                containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
-                                needsRender = false; lastRefresh = DateTime.MinValue;
                                 break;
 
-                            case ConsoleKey.S: // Stop All running containers
-                                var sRunning = containers.Where(c => c.IsRunning).ToList();
-                                if (sRunning.Count == 0) { needsRender = false; break; }
-                                var sOv = new Overlay(6, 62, Math.Min(sRunning.Count + 8, 26));
-                                var sLn = new List<string> { "", $"Stopping {sRunning.Count} running container(s)...", "" };
-                                sOv.Show("Stop All", sLn);
-                                foreach (var sc in sRunning)
+                            case ConsoleKey.S: // Stop All running containers (or Shift+S: stop highlighted)
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
                                 {
-                                    try { await dockerService.StopContainerAsync(sc.Id); sLn.Add($"✓ {sc.Service}"); }
-                                    catch (Exception ex) { sLn.Add($"✗ {sc.Service}: {ex.Message}"); }
-                                    sOv.Update(sLn);
+                                    var sRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(1, sRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
                                 }
-                                sLn.Add(""); sLn.Add("Press any key to close...");
-                                sOv.Update(sLn); Console.ReadKey(true); sOv.Hide();
-                                containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
-                                needsRender = false; lastRefresh = DateTime.MinValue;
+                                else
+                                {
+                                    var sRunning = containers.Where(c => c.IsRunning).ToList();
+                                    if (sRunning.Count == 0) { needsRender = false; break; }
+                                    var sOv = new Overlay(6, 62, Math.Min(sRunning.Count + 8, 26));
+                                    var sLn = new List<string> { "", $"Stopping {sRunning.Count} running container(s)...", "" };
+                                    sOv.Show("Stop All", sLn);
+                                    foreach (var sc in sRunning)
+                                    {
+                                        try { await dockerService.StopContainerAsync(sc.Id); sLn.Add($"✓ {sc.Service}"); }
+                                        catch (Exception ex) { sLn.Add($"✗ {sc.Service}: {ex.Message}"); }
+                                        sOv.Update(sLn);
+                                    }
+                                    sLn.Add(""); sLn.Add("Press any key to close...");
+                                    sOv.Update(sLn); Console.ReadKey(true); sOv.Hide();
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
                                 break;
 
-                            case ConsoleKey.P: // Start All stopped containers
-                                var pStopped = containers.Where(c => !c.IsRunning).ToList();
-                                if (pStopped.Count == 0) { needsRender = false; break; }
-                                var pOv = new Overlay(6, 62, Math.Min(pStopped.Count + 8, 26));
-                                var pLn = new List<string> { "", $"Starting {pStopped.Count} stopped container(s)...", "" };
-                                pOv.Show("Start All", pLn);
-                                foreach (var pc in pStopped)
+                            case ConsoleKey.P: // Start All stopped containers (or Shift+P: start highlighted)
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
                                 {
-                                    try { await dockerService.StartContainerAsync(pc.Id); pLn.Add($"✓ {pc.Service}"); }
-                                    catch (Exception ex) { pLn.Add($"✗ {pc.Service}: {ex.Message}"); }
-                                    pOv.Update(pLn);
+                                    var pRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(0, pRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
                                 }
-                                pLn.Add(""); pLn.Add("Press any key to close...");
-                                pOv.Update(pLn); Console.ReadKey(true); pOv.Hide();
-                                containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
-                                needsRender = false; lastRefresh = DateTime.MinValue;
+                                else
+                                {
+                                    var pStopped = containers.Where(c => !c.IsRunning).ToList();
+                                    if (pStopped.Count == 0) { needsRender = false; break; }
+                                    var pOv = new Overlay(6, 62, Math.Min(pStopped.Count + 8, 26));
+                                    var pLn = new List<string> { "", $"Starting {pStopped.Count} stopped container(s)...", "" };
+                                    pOv.Show("Start All", pLn);
+                                    foreach (var pc in pStopped)
+                                    {
+                                        try { await dockerService.StartContainerAsync(pc.Id); pLn.Add($"✓ {pc.Service}"); }
+                                        catch (Exception ex) { pLn.Add($"✗ {pc.Service}: {ex.Message}"); }
+                                        pOv.Update(pLn);
+                                    }
+                                    pLn.Add(""); pLn.Add("Press any key to close...");
+                                    pOv.Update(pLn); Console.ReadKey(true); pOv.Hide();
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
                                 break;
 
-                            case ConsoleKey.D: // Delete All containers (with confirmation)
-                                var dAll = containers.ToList();
+                            case ConsoleKey.D: // Delete All containers (or Shift+D: delete highlighted)
+                                if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                                {
+                                    var dRows = new List<DisplayRow> { displayRows[selectedIndex] };
+                                    await actionMenu.ExecuteDirectAsync(5, dRows);
+                                    containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                    needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
+                                else
+                                {
+                                    var dAll = containers.ToList();
                                 if (dAll.Count == 0) { needsRender = false; break; }
                                 var dConfOv = new Overlay(6, 64, 10);
                                 var dConfLn = new List<string> { "", $"Delete ALL {dAll.Count} container(s)?", "", "Running containers will be stopped first.", "", "Press Y to confirm, any other key to cancel" };
@@ -520,6 +714,7 @@ class Program
                                 dOv.Update(dLn); Console.ReadKey(true); dOv.Hide();
                                 containerListView.Render(displayRows, selectedIndex, markedIndices, showOnlyRunning, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
                                 needsRender = false; lastRefresh = DateTime.MinValue;
+                                }
                                 break;
 
                             case ConsoleKey.Q:

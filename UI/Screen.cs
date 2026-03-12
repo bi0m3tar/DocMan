@@ -106,6 +106,9 @@ public static class Screen
     private static readonly System.Text.RegularExpressions.Regex AnsiRegex =
         new(@"\x1B\[[0-9;]*[a-zA-Z]", System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    public static string Hyperlink(string url, string text) =>
+        $"\x1B]8;;{url}\x1B\\{text}\x1B]8;;\x1B\\";
+
     public static string StripAnsi(string line)
     {
         var s = AnsiRegex.Replace(line, "");

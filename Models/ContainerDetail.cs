@@ -10,7 +10,14 @@ public record ContainerDetail(
     string? CpuLimit,
     IReadOnlyList<MountInfo> Mounts,
     IReadOnlyList<NetworkInfo> Networks,
-    IReadOnlyList<string> Ports
+    IReadOnlyList<string> Ports,
+    string? RestartPolicy,
+    string? Command,
+    string? ExitCode,
+    bool OomKilled,
+    string? StartedAt,
+    string? FinishedAt,
+    IReadOnlyList<string> EnvVars
 );
 
 public record MountInfo(string Source, string Destination, string Mode);

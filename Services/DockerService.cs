@@ -182,8 +182,9 @@ public class DockerService
                         }
                     }
                 }
-                ports = string.Join(", ", portMappings.Take(2));
-                if (portMappings.Count > 2) ports += "...";
+                var distinctMappings = portMappings.Distinct().ToList();
+                ports = string.Join(", ", distinctMappings.Take(2));
+                if (distinctMappings.Count > 2) ports += "...";
             }
 
             labels.TryGetValue("com.docker.compose.project.config_files", out var composeFile);
@@ -263,6 +264,68 @@ public class DockerService
 
     public async Task DeleteContainerAsync(string id) =>
         await RunWslAsync($"docker rm {id}");
+
+    public async Task KillContainerAsync(string id) =>
+        await RunWslAsync($"docker kill {id}");
+
+    public async Task<string> ReadComposeFileAsync(string composeFile)
+    {
+        var (output, stderr, exitCode) = await RunWslDetailedAsync($"cat \"{composeFile}\"");
+        if (exitCode != 0 || string.IsNullOrWhiteSpace(output))
+            return stderr.Length > 0 ? $"Error reading file: {stderr}" : "(empty)";
+        return output;
+    }
+
+    public async Task<List<string>> PruneImagesAsync()
+    {
+        var (output, stderr, _) = await RunWslDetailedAsync("docker image prune --all --force");
+        var raw = string.IsNullOrWhiteSpace(output) ? stderr : output;
+
+        var namedImages = new List<string>();
+        var deletedLayers = 0;
+        string? totalSpace = null;
+
+        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith("untagged:", StringComparison.OrdinalIgnoreCase) && !line.Contains("@sha256:"))
+                namedImages.Add(line["untagged:".Length..].Trim());
+            else if (line.StartsWith("deleted:", StringComparison.OrdinalIgnoreCase))
+                deletedLayers++;
+            else if (line.StartsWith("Total reclaimed space:", StringComparison.OrdinalIgnoreCase))
+                totalSpace = line;
+        }
+
+        var result = new List<string>();
+
+        if (namedImages.Count == 0 && deletedLayers == 0)
+        {
+            result.Add("No images to prune.");
+            return result;
+        }
+
+        if (namedImages.Count > 0)
+        {
+            result.Add($"Removed {namedImages.Count} image(s):");
+            foreach (var img in namedImages)
+                result.Add($"  - {img}");
+        }
+
+        if (deletedLayers > 0)
+        {
+            if (namedImages.Count > 0) result.Add("");
+            result.Add(namedImages.Count == 0
+                ? $"Removed {deletedLayers} unnamed/dangling image layer(s)."
+                : $"({deletedLayers} layer(s) deleted)");
+        }
+
+        if (totalSpace != null)
+        {
+            result.Add("");
+            result.Add(totalSpace);
+        }
+
+        return result;
+    }
 
     public async Task<(double cpuPercent, double memoryMb, double memoryLimitMb, int cores)> GetTotalStatsAsync()
     {
@@ -427,8 +490,61 @@ public class DockerService
                             var parts = portEntry.Name.Split('/');
                             ports.Add($"{hp.GetString()} → {parts[0]}/{(parts.Length > 1 ? parts[1] : "tcp")}");
                         }
+        ports = ports.Distinct().ToList();
 
-        return new ContainerDetail(id, name, image, created, status, memLimit, cpuLimit, mounts, networks, ports);
+        // Restart policy
+        string? restartPolicy = null;
+        if (el.TryGetProperty("HostConfig", out var hc2) &&
+            hc2.TryGetProperty("RestartPolicy", out var rpEl) &&
+            rpEl.TryGetProperty("Name", out var rpName))
+        {
+            var rpStr = rpName.GetString() ?? "";
+            if (!string.IsNullOrEmpty(rpStr) && rpStr != "no")
+            {
+                restartPolicy = rpStr;
+                if (rpStr == "on-failure" && rpEl.TryGetProperty("MaximumRetryCount", out var retries) && retries.GetInt32() > 0)
+                    restartPolicy += $":{retries.GetInt32()}";
+            }
+        }
+
+        // Command
+        string? command = null;
+        if (config.TryGetProperty("Cmd", out var cmdEl) && cmdEl.ValueKind == JsonValueKind.Array)
+        {
+            var parts = cmdEl.EnumerateArray().Select(c => c.GetString() ?? "").ToList();
+            if (parts.Count > 0) command = string.Join(" ", parts);
+        }
+
+        // State details: exit code, OOM, started/finished
+        string? exitCode = null;
+        bool oomKilled = false;
+        string? startedAt = null;
+        string? finishedAt = null;
+        if (el.TryGetProperty("State", out var stateEl))
+        {
+            if (stateEl.TryGetProperty("ExitCode", out var ecEl))
+                exitCode = ecEl.GetInt32().ToString();
+            if (stateEl.TryGetProperty("OOMKilled", out var oomEl))
+                oomKilled = oomEl.GetBoolean();
+            if (stateEl.TryGetProperty("StartedAt", out var saEl) &&
+                DateTime.TryParse(saEl.GetString(), out var saDt) && saDt.Year > 1)
+                startedAt = saDt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            if (stateEl.TryGetProperty("FinishedAt", out var faEl) &&
+                DateTime.TryParse(faEl.GetString(), out var faDt) && faDt.Year > 1)
+                finishedAt = faDt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
+        // Environment variables (filter out common noise)
+        var envVars = new List<string>();
+        if (config.TryGetProperty("Env", out var envEl) && envEl.ValueKind == JsonValueKind.Array)
+            foreach (var e in envEl.EnumerateArray())
+            {
+                var s = e.GetString() ?? "";
+                if (!string.IsNullOrEmpty(s)) envVars.Add(s);
+            }
+
+        return new ContainerDetail(id, name, image, created, status, memLimit, cpuLimit, mounts, networks, ports,
+            restartPolicy, command, exitCode, oomKilled, startedAt, finishedAt, envVars);
     }
 
     public async Task<ContainerStats?> GetContainerStatsDetailAsync(string id)

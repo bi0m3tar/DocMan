@@ -56,12 +56,13 @@ public class ActionMenu
         };
         if (canRecreate)
             menuItems.Add(("Recreate (up --force-recreate)", 3));
+        menuItems.Add(("Kill",               6));
         menuItems.Add(("Delete",             5));
         if (!isProjectSelected)
         {
-            menuItems.Add(("Inspect",        4));
-            menuItems.Add(("Info",           8));
+            menuItems.Add(("Live Logs",      4));
         }
+        menuItems.Add(("Info",               8));
         if (canTerminal)
             menuItems.Add(("Terminal",       7));
 
@@ -212,7 +213,14 @@ public class ActionMenu
                 }
                 break;
             case 8: // Info
-                if (selectedContainers.Count == 1)
+                if (isProjectSelected)
+                {
+                    // Show project-level info with compose file content
+                    var projectName = selectedContainers.FirstOrDefault()?.Project ?? "";
+                    var projectViewer = new ProjectInfoViewer(_dockerService);
+                    await projectViewer.ShowAsync(projectName, selectedContainers);
+                }
+                else if (selectedContainers.Count == 1)
                 {
                     var infoViewer = new InfoViewer(_dockerService);
                     await infoViewer.ShowAsync(selectedContainers[0]);
@@ -221,7 +229,29 @@ public class ActionMenu
             case 5: // Delete
                 await DeleteContainersAsync(selectedContainers);
                 break;
+            case 6: // Kill
+                await ExecuteActionAsync(selectedContainers, "Killing", c => _dockerService.KillContainerAsync(c.Id));
+                break;
         }
+    }
+
+    public async Task<ContainerInfo?> ExecuteDirectAsync(int action, List<DisplayRow> selectedRows)
+    {
+        bool isProjectSelected = selectedRows.Any(r => r.IsProjectRow);
+        var selectedContainers = new List<ContainerInfo>();
+        foreach (var row in selectedRows)
+        {
+            if (row.IsProjectRow)
+                selectedContainers.AddRange(row.ProjectContainers);
+            else if (row.Container != null)
+                selectedContainers.Add(row.Container);
+        }
+        selectedContainers = selectedContainers.GroupBy(c => c.Id).Select(g => g.First()).ToList();
+        if (selectedContainers.Count == 0) return null;
+        if (action == 7) // Terminal — caller handles it
+            return selectedContainers.Count == 1 && selectedContainers[0].IsRunning ? selectedContainers[0] : null;
+        await ExecuteMenuActionAsync(action, selectedContainers, isProjectSelected);
+        return null;
     }
 
     private async Task DeleteContainersAsync(List<ContainerInfo> containers)

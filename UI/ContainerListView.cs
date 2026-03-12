@@ -81,7 +81,7 @@ public class ContainerListView
 
         // Rows 2-3: controls split across two lines — padded to full width so old text is never left behind
         var controls1 = "↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions";
-        var controls2 = "P:Start All │ S:Stop All │ D:Delete All │ I:Inspect │ R:Toggle Running │ U:Update Docker │ W:Restart WSL/Docker │ Q:Quit";
+        var controls2 = "P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ W:Restart WSL │ H:Help │ Q:Quit";
         Screen.WriteLine(controls1.PadRight(183), ConsoleColor.Cyan);
         Screen.WriteLine(controls2.PadRight(183), ConsoleColor.Cyan);
         
@@ -274,7 +274,7 @@ public class ContainerListView
 
         // Label
         Screen.SetCursorPosition(0, logStart + 1);
-        Screen.Write($" Live logs: {label}  (I to close)".PadRight(width), ConsoleColor.Yellow);
+        Screen.Write($" Live logs: {label}  (L to close)".PadRight(width), ConsoleColor.Yellow);
 
         // Log lines
         for (int i = 0; i < LogPanelLines; i++)
