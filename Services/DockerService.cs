@@ -11,14 +11,7 @@ public class DockerService
 
     private static async Task<(string output, string stderr, int exitCode)> RunWslDetailedAsync(string arguments)
     {
-        var psi = new ProcessStartInfo("wsl", arguments)
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        using var proc = Process.Start(psi)!;
+        using var proc = Process.Start(Platform.ShellCommand(arguments))!;
         var outputTask = proc.StandardOutput.ReadToEndAsync();
         var stderrTask = proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
@@ -32,45 +25,70 @@ public class DockerService
     }
 
     /// <summary>
-    /// Checks WSL availability and Docker installation before the UI starts.
+    /// Checks prerequisites before the UI starts.
     /// Returns null on success, or an error message string on failure.
     /// </summary>
     public static async Task<string?> CheckPrerequisitesAsync()
     {
-        // 1. Check if wsl.exe is available
-        ProcessStartInfo wslVersionPsi;
-        try
+        if (Platform.IsWindows)
         {
-            wslVersionPsi = new ProcessStartInfo("wsl", "--version")
+            // 1. Check if wsl.exe is available
+            try
             {
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            using var vProc = Process.Start(wslVersionPsi);
-            if (vProc == null)
-                return "WSL is not installed or not accessible.\nInstall WSL: https://aka.ms/wsl";
-            await vProc.WaitForExitAsync();
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return "WSL is not installed.\nInstall it by running:  wsl --install\nSee: https://aka.ms/wsl";
-        }
+                var wslVersionPsi = new ProcessStartInfo("wsl", "--version")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using var vProc = Process.Start(wslVersionPsi);
+                if (vProc == null)
+                    return "WSL is not installed or not accessible.\nInstall WSL: https://aka.ms/wsl";
+                await vProc.WaitForExitAsync();
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return "WSL is not installed.\nInstall it by running:  wsl --install\nSee: https://aka.ms/wsl";
+            }
 
-        // 2. Check if WSL can actually launch a shell (default distro present & working)
-        var (echoOut, echoErr, echoExit) = await RunWslDetailedAsync("echo __wsl_ok__");
-        if (echoExit != 0 || !echoOut.Contains("__wsl_ok__"))
-        {
-            var hint = string.IsNullOrWhiteSpace(echoErr) ? "" : $"\n  {echoErr.Split('\n')[0]}";
-            return $"WSL is installed but could not start.{hint}\n\nPossible fixes:\n  wsl --install\n  wsl --set-default <distro-name>";
-        }
+            // 2. Check if WSL can actually launch a shell
+            var (echoOut, echoErr, echoExit) = await RunWslDetailedAsync("echo __wsl_ok__");
+            if (echoExit != 0 || !echoOut.Contains("__wsl_ok__"))
+            {
+                var hint = string.IsNullOrWhiteSpace(echoErr) ? "" : $"\n  {echoErr.Split('\n')[0]}";
+                return $"WSL is installed but could not start.{hint}\n\nPossible fixes:\n  wsl --install\n  wsl --set-default <distro-name>";
+            }
 
-        // 3. Check if docker is available inside WSL
-        var (dockerOut, _, dockerExit) = await RunWslDetailedAsync("docker --version");
-        if (dockerExit != 0 || !dockerOut.Contains("Docker"))
+            // 3. Check if docker is available inside WSL
+            var (dockerOut, _, dockerExit) = await RunWslDetailedAsync("docker --version");
+            if (dockerExit != 0 || !dockerOut.Contains("Docker"))
+                return "Docker is not installed in WSL.\nInstall it inside your WSL distro:\n  curl -fsSL https://get.docker.com | sudo sh";
+        }
+        else
         {
-            return "Docker is not installed in WSL.\nInstall it inside your WSL distro:\n  curl -fsSL https://get.docker.com | sudo sh";
+            // Linux: just verify docker is installed and reachable
+            try
+            {
+                var psi = new ProcessStartInfo("docker", "--version")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                using var proc = Process.Start(psi);
+                if (proc == null)
+                    return "Docker is not installed or not in PATH.\nInstall it: curl -fsSL https://get.docker.com | sudo sh";
+                var output = await proc.StandardOutput.ReadToEndAsync();
+                await proc.WaitForExitAsync();
+                if (proc.ExitCode != 0 || !output.Contains("Docker"))
+                    return "Docker is not installed or not in PATH.\nInstall it: curl -fsSL https://get.docker.com | sudo sh";
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return "Docker is not installed or not in PATH.\nInstall it: curl -fsSL https://get.docker.com | sudo sh";
+            }
         }
 
         return null;
@@ -82,13 +100,17 @@ public class DockerService
 
         if (idsExit != 0 || (!string.IsNullOrWhiteSpace(idsErr) && string.IsNullOrWhiteSpace(idsRaw)))
         {
-            // Detect Docker Desktop binary used without Docker Desktop running
-            var (whichOut, _, _) = await RunWslDetailedAsync("-- which docker");
-            if (whichOut.Contains("/mnt/c/"))
-                throw new Exception("Docker Engine not installed in WSL. Run: curl -fsSL https://get.docker.com | sudo sh");
+            if (Platform.IsWindows)
+            {
+                // Detect Docker Desktop binary used without Docker Desktop running
+                var (whichOut, _, _) = await RunWslDetailedAsync("-- which docker");
+                if (whichOut.Contains("/mnt/c/"))
+                    throw new Exception("Docker Engine not installed in WSL. Run: curl -fsSL https://get.docker.com | sudo sh");
+            }
 
-            // Try to start native Docker daemon as root
-            var (_, startErr, startExit) = await RunWslDetailedAsync("-u root -- service docker start");
+            // Try to start the Docker daemon
+            var startCmd = Platform.IsWindows ? "-u root -- service docker start" : "sudo -n service docker start";
+            var (_, startErr, startExit) = await RunWslDetailedAsync(startCmd);
             if (startExit != 0 && !string.IsNullOrWhiteSpace(startErr))
                 throw new Exception($"Could not start Docker daemon: {startErr.Split('\n')[0]}");
 
@@ -411,13 +433,9 @@ public class DockerService
 
     public Process StartUpdateProcess()
     {
-        var psi = new ProcessStartInfo("wsl", "-u root -- apt-get install --only-upgrade -y docker-ce docker-ce-cli containerd.io")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
+        var psi = Platform.IsWindows
+            ? Platform.ShellCommand("-u root -- apt-get install --only-upgrade -y docker-ce docker-ce-cli containerd.io")
+            : Platform.ShellCommand("sudo apt-get install --only-upgrade -y docker-ce docker-ce-cli containerd.io");
         return Process.Start(psi)!;
     }
 

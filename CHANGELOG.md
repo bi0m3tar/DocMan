@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.3] - 2026-03-13
+
+### Added
+
+- **Linux support** — DocMan now runs natively on Linux, calling `docker` directly without a WSL wrapper
+- **Cross-platform `Platform` abstraction** (`Services/Platform.cs`) — routes all shell commands through `wsl` on Windows and `sh -c` on Linux; the rest of the codebase is identical on both platforms
+- Lowercase executable name: `docman` (Windows: `docman.exe`, Linux: `docman`)
+
+### Changed
+
+- On Linux the `W` key restarts the Docker service (`sudo systemctl restart docker`) instead of restarting WSL; the controls bar label updates accordingly
+- Prerequisite check is now platform-aware: on Linux it verifies `docker` is in PATH directly, skipping the WSL checks
+- Docker daemon auto-start uses `sudo -n service docker start` on Linux instead of `wsl -u root -- service docker start`
+- Docker update uses `sudo apt-get install` on Linux instead of the WSL root flag
+- `RestartDockerAsync` works on both platforms: PowerShell service control on Windows, `sudo systemctl restart docker` on Linux
+- `OpenTerminalAsync` calls `docker exec` directly on Linux instead of routing through `wsl`
+
+---
+
 ## [1.1.2] - 2026-03-12
 
 ### Added

@@ -81,7 +81,9 @@ public class ContainerListView
 
         // Rows 2-3: controls split across two lines — padded to full width so old text is never left behind
         var controls1 = "↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions";
-        var controls2 = "P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ W:Restart WSL │ H:Help │ Q:Quit";
+        var controls2 = "P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ " +
+                        (DocMan.Services.Platform.IsWindows ? "W:Restart WSL" : "W:Restart Docker") +
+                        " │ H:Help │ Q:Quit";
         Screen.WriteLine(controls1.PadRight(183), ConsoleColor.Cyan);
         Screen.WriteLine(controls2.PadRight(183), ConsoleColor.Cyan);
         

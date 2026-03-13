@@ -55,15 +55,7 @@ public class ComposeService
 
             var process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "wsl",
-                    Arguments = $"docker compose -f \"{composeFile}\" up -d{(forceRecreate ? " --force-recreate" : "")}",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
+                StartInfo = Platform.ShellCommand($"docker compose -f \"{composeFile}\" up -d{(forceRecreate ? " --force-recreate" : "")}")
             };
 
             process.Start();
@@ -155,15 +147,7 @@ public class ComposeService
         {
             using var process = new Process
             {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = "wsl",
-                    Arguments = $"docker compose -f \"{composeFile}\" {command} {arguments}",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                }
+                StartInfo = Platform.ShellCommand($"docker compose -f \"{composeFile}\" {command} {arguments}")
             };
 
             process.Start();
@@ -201,11 +185,11 @@ public class ComposeService
     public async Task RestartDockerAsync()
     {
         var overlay = new Overlay(8, 60, 10);
-        
+
         var statusLines = new List<string>
         {
             "",
-            "Restarting Docker Desktop...",
+            Platform.IsWindows ? "Restarting Docker Desktop..." : "Restarting Docker service...",
             "",
             "This may take a minute.",
             "",
@@ -221,42 +205,56 @@ public class ComposeService
             return;
         }
 
-        statusLines = new List<string>
-        {
-            "",
-            "Stopping Docker service...",
-            ""
-        };
+        statusLines = new List<string> { "", "Restarting Docker...", "" };
         overlay.Update(statusLines);
 
         try
         {
-            using var stopProcess = Process.Start(new ProcessStartInfo
+            if (Platform.IsWindows)
             {
-                FileName = "powershell",
-                Arguments = "-Command \"Stop-Service com.docker.service -Force\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                Verb = "runas"
-            });
-            await stopProcess!.WaitForExitAsync();
+                using var stopProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "powershell",
+                    Arguments = "-Command \"Stop-Service com.docker.service -Force\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    Verb = "runas"
+                });
+                await stopProcess!.WaitForExitAsync();
+                statusLines.Add("✓ Service stopped");
+                statusLines.Add("");
+                statusLines.Add("Starting Docker service...");
+                overlay.Update(statusLines);
 
-            statusLines.Add("✓ Service stopped");
-            statusLines.Add("");
-            statusLines.Add("Starting Docker service...");
-            overlay.Update(statusLines);
-
-            using var startProcess = Process.Start(new ProcessStartInfo
+                using var startProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "powershell",
+                    Arguments = "-Command \"Start-Service com.docker.service\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    Verb = "runas"
+                });
+                await startProcess!.WaitForExitAsync();
+                statusLines.Add("✓ Service started");
+            }
+            else
             {
-                FileName = "powershell",
-                Arguments = "-Command \"Start-Service com.docker.service\"",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                Verb = "runas"
-            });
-            await startProcess!.WaitForExitAsync();
-
-            statusLines.Add("✓ Service started");
+                using var restartProcess = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "sudo",
+                    Arguments = "systemctl restart docker",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+                var err = await restartProcess!.StandardError.ReadToEndAsync();
+                await restartProcess.WaitForExitAsync();
+                if (restartProcess.ExitCode == 0)
+                    statusLines.Add("✓ Docker service restarted");
+                else
+                    statusLines.Add($"✗ Failed: {(string.IsNullOrWhiteSpace(err) ? $"exit {restartProcess.ExitCode}" : err.Split('\n')[0])}");
+            }
         }
         catch (Exception ex)
         {
@@ -273,6 +271,12 @@ public class ComposeService
 
     public async Task RestartWSLAsync()
     {
+        if (!Platform.IsWindows)
+        {
+            await RestartDockerAsync();
+            return;
+        }
+
         var overlay = new Overlay(8, 60, 10);
         
         var statusLines = new List<string>

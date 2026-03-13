@@ -1,8 +1,8 @@
 # DocMan — DOcker Container MANager
 
-A lightweight, keyboard-driven terminal UI for managing Docker containers running in WSL. No Docker Desktop required.
+A lightweight, keyboard-driven terminal UI (TUI) for managing Docker containers. Runs on Windows (via WSL) and Linux — no Docker Desktop required.
 
-![.NET](https://img.shields.io/badge/.NET-10.0-512BD4) ![Platform](https://img.shields.io/badge/platform-Windows-0078D4) ![License](https://img.shields.io/badge/license-MIT-green)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
@@ -11,13 +11,14 @@ A lightweight, keyboard-driven terminal UI for managing Docker containers runnin
 DocMan has **zero external (NuGet) dependencies**. It is built entirely on the .NET 10.0 base class library:
 
 - `System.Console` — terminal rendering and keyboard input
-- `System.Diagnostics.Process` — spawning `wsl` / `docker` subprocesses
+- `System.Diagnostics.Process` — spawning `docker` / `wsl` subprocesses
 - `System.Threading.Tasks` — async background refresh tasks
 
 No third-party packages are required.
 
 ## Requirements
 
+### Windows
 - Windows 10 / 11
 - [WSL](https://aka.ms/wsl) with a Linux distro (Ubuntu recommended)
 - Docker Engine installed **inside WSL** (not Docker Desktop)
@@ -27,25 +28,50 @@ No third-party packages are required.
 curl -fsSL https://get.docker.com | sudo sh
 ```
 
-DocMan will check for WSL and Docker at startup and print a clear error message if either is missing.
+### Linux
+- Any Linux distro with Docker Engine installed
+- `sudo` access (required for daemon auto-start and docker updates)
+
+```bash
+# Install Docker Engine
+curl -fsSL https://get.docker.com | sudo sh
+```
+
+DocMan checks for Docker at startup and prints a clear error if it is missing.
 
 ---
 
 ## Installation
 
+### Download a release
+
+Download the pre-built binary for your platform from the [GitHub Releases](https://github.com/bi0m3tar/DocMan/releases) page:
+
+- **Windows** — `docman.exe` (no .NET install required)
+- **Linux** — `docman` (no .NET install required)
+
+```bash
+# Linux: make it executable and run
+chmod +x docman
+./docman
+```
+
 ### Run from source
 
 ```powershell
-git clone https://github.com/youruser/docman.git
-cd docman
+git clone https://github.com/bi0m3tar/DocMan.git
+cd DocMan
 dotnet run
 ```
 
 ### Build a self-contained single-file executable
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
-.\publish\DocMan.exe
+# Windows
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -o publish\release
+
+# Linux
+dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -o publish/linux
 ```
 
 ---
@@ -63,11 +89,11 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 - **Terminal access** — open an interactive shell inside any running container
 - **Kill** — send SIGKILL to a container without a graceful stop
 - **Docker Engine update** — upgrade docker-ce in WSL without leaving the app (`U`); notified automatically at startup when an update is available
-- **WSL restart** — shut down and restart WSL (`W`)
+- **WSL restart / Docker restart** — on Windows: shut down and restart WSL (`W`); on Linux: restart the Docker service (`W`)
 - **Version bar** — shows installed docker-ce version vs latest available, highlighted in red when an update is ready
 - **Resource bar** — total CPU %, memory usage, and core count across all running containers
 - **Help page** — full keyboard shortcut reference (`H`)
-- **Startup checks** — validates WSL is installed, can start, and that Docker is available before the UI loads
+- **Startup checks** — validates WSL (Windows) or Docker (Linux) is available before the UI loads
 
 ---
 
@@ -87,7 +113,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | `R` | Toggle running-only filter |
 | `N` | Prune all unused Docker images |
 | `U` | Update Docker Engine in WSL (apt upgrade) |
-| `W` | Restart WSL |
+| `W` | Restart WSL (Windows) / Restart Docker service (Linux) |
 | `H` | Show keyboard shortcut help |
 | `Q` | Quit |
 
@@ -135,7 +161,7 @@ Press `C` or `Esc` to dismiss the menu without taking action.
 ## Display
 
 ```
-DocMan - DOcker Container MANager  v1.1.2
+DocMan - DOcker Container MANager  v1.1.3
 ↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions
 P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ W:Restart WSL │ H:Help │ Q:Quit
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -164,8 +190,9 @@ DocMan/
 │   ├── ContainerGroup.cs
 │   └── DisplayRow.cs
 ├── Services/
-│   ├── DockerService.cs        # All docker / WSL process calls
-│   └── ComposeService.cs       # docker-compose operations and WSL restart
+│   ├── DockerService.cs        # All docker process calls (platform-aware)
+│   ├── ComposeService.cs       # docker-compose operations and WSL/Docker restart
+│   └── Platform.cs             # Platform abstraction (Windows: wsl, Linux: sh -c)
 ├── UI/
 │   ├── Screen.cs               # Console helpers + VT processing + scroll region
 │   ├── ContainerListView.cs    # Main list renderer

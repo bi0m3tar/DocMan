@@ -129,11 +129,23 @@ class Program
             // Freeze rows 0-2; all scrolling confined to row 3 downwards
             Screen.SetScrollRegion(3);
 
-            var psi = new ProcessStartInfo("wsl",
-                $"docker exec -it {container.Id} sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'")
+            ProcessStartInfo psi;
+            if (Platform.IsWindows)
             {
-                UseShellExecute = false
-            };
+                psi = new ProcessStartInfo("wsl",
+                    $"docker exec -it {container.Id} sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'")
+                {
+                    UseShellExecute = false
+                };
+            }
+            else
+            {
+                psi = new ProcessStartInfo("docker",
+                    $"exec -it {container.Id} sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'")
+                {
+                    UseShellExecute = false
+                };
+            }
 
             try
             {
