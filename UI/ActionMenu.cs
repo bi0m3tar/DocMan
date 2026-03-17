@@ -62,7 +62,7 @@ public class ActionMenu
         {
             menuItems.Add(("Live Logs",      4));
         }
-        menuItems.Add(("Info",               8));
+        menuItems.Add(("Detailed Info",      8));
         if (canTerminal)
             menuItems.Add(("Terminal",       7));
 

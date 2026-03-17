@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.4] - 2026-03-17
+
+### Added
+
+- **Networks page** (`N`) — lists all Docker networks with NAME, STATUS, DRIVER, SUBNET, CONTAINERS and CREATED columns; color-coded (green = in use, red = unused, gray = system); supports multi-select, filter, prune, and action menu with Detailed Info / Delete
+- **Images page** (`I`) — lists all Docker images with ID, REPOSITORY, TAG, SIZE, STATUS and CREATED columns; color-coded (green = in use, yellow = unused, red = dangling); supports multi-select, 4-state status filter (All / In Use / Unused / Dangling), prune, and action menu
+- **Volumes page** (`V`) — lists all Docker volumes with NAME, STATUS, DRIVER, SCOPE and CREATED columns; color-coded (green = in use, red = unused); supports multi-select, filter, prune, and action menu
+- **Global navigation bar** (row 1) — `←→:Switch Page │ C:Containers N:Networks I:Images V:Volumes │ U:Update Docker W:Restart WSL/Docker H:Help Q:Quit`; active page highlighted in white
+- **Page cycling** — `←` / `→` arrow keys cycle through Containers → Networks → Images → Volumes and back
+- **T:Toggle Status** filter on all pages — cycles All → Running Only → Not Running (Containers), In Use → Unused → All (Networks / Volumes), All → In Use → Unused → Dangling (Images); replaces the old `R:Toggle Running` on the container page
+- **Shift+I** — open Detailed Info for selected item on Networks / Images / Volumes pages
+- **Shift+D** — delete selected item directly on Networks / Images / Volumes pages
+- **Stop All confirmation** — pressing `S` on the container page now shows a confirmation overlay before stopping all running containers
+
+### Changed
+
+- Action menu label "Info" / "Details" unified to **"Detailed Info"** across all pages
+- Container page: `D:Delete All` renamed to **`D:Delete Marked`** — only deletes marked containers; no-op if nothing is marked
+- Container page: `R:Toggle Running` moved to **`T:Toggle Status`** with a 3-state cycle (All / Running Only / Not Running); `R` now only handles `Shift+R` (Restart)
+- Separator lines standardised to **184 characters** on all pages
+- Footer on Networks / Images / Volumes pages shows unused/dangling counts without warning icons
+- Filter status badges (e.g. `[IN USE]`, `[NOT RUNNING]`) appear in the title bar rather than the controls row
+
+---
+
 ## [1.1.3] - 2026-03-13
 
 ### Added

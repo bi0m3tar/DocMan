@@ -1,6 +1,6 @@
 # DocMan — DOcker Container MANager
 
-A lightweight, keyboard-driven terminal UI (TUI) for managing Docker containers. Runs on Windows (via WSL) and Linux — no Docker Desktop required.
+A lightweight, keyboard-driven terminal UI (TUI) for managing Docker containers, networks, images and volumes. Runs on Windows (via WSL) and Linux — no Docker Desktop required.
 
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4) ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -78,17 +78,21 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 
 ## Features
 
+- **Multi-page UI** — Containers, Networks, Images and Volumes pages, switchable with `←`/`→` or `N`/`I`/`V`/`C`
 - **Container list** grouped by Docker Compose project, with standalone containers listed separately
-- **Multi-select** — mark individual containers or whole projects with `Space`
+- **Multi-select** — mark individual items or whole projects with `Space`
 - **Batch operations** — start, stop, or delete all marked items at once
-- **Global actions** — start all / stop all / delete all without selecting anything
 - **Live log tail** — real-time log panel pinned to the bottom of the screen (`L`)
 - **Fullscreen live logs** — fullscreen streaming log view (`Shift+L` or via action menu)
-- **Container Info** — scrollable detailed view with image, volumes, network settings, resource usage, and environment variables (auto-refreshes every 2 s)
-- **Project Info** — shows compose file path, services summary, and the full `docker-compose.yml` content with YAML syntax highlighting (scrollable)
+- **Container / Project Info** — scrollable detailed view with image, volumes, network settings, resource usage, environment variables; project rows show compose file content with YAML highlighting
+- **Networks viewer** — list, filter (in use / unused), inspect, delete, and prune Docker networks
+- **Images viewer** — list, filter (All / In Use / Unused / Dangling), inspect, delete, and prune Docker images
+- **Volumes viewer** — list, filter (in use / unused), inspect, delete, and prune Docker volumes
+- **Color coding** — green = in use / running, yellow = unused images, red = unused / stopped, gray = system
+- **Status filters** — `T:Toggle Status` cycles filter states on every page; active filter shown in title bar
 - **Terminal access** — open an interactive shell inside any running container
 - **Kill** — send SIGKILL to a container without a graceful stop
-- **Docker Engine update** — upgrade docker-ce in WSL without leaving the app (`U`); notified automatically at startup when an update is available
+- **Docker Engine update** — upgrade docker-ce without leaving the app (`U`); notified automatically at startup when an update is available
 - **WSL restart / Docker restart** — on Windows: shut down and restart WSL (`W`); on Linux: restart the Docker service (`W`)
 - **Version bar** — shows installed docker-ce version vs latest available, highlighted in red when an update is ready
 - **Resource bar** — total CPU %, memory usage, and core count across all running containers
@@ -99,25 +103,49 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 
 ## Keyboard Controls
 
-### Main screen
+### Global (all pages)
 
 | Key | Action |
 |-----|--------|
-| `↑` / `↓` | Navigate the container list |
-| `Space` | Mark / unmark container or project (marking a project marks all its services) |
-| `Enter` | Open action menu for selected / marked items |
-| `L` | Toggle live log tail panel for highlighted container |
-| `P` | Start all stopped containers |
-| `S` | Stop all running containers |
-| `D` | Delete all containers (with confirmation) |
-| `R` | Toggle running-only filter |
-| `N` | Prune all unused Docker images |
-| `U` | Update Docker Engine in WSL (apt upgrade) |
+| `←` / `→` | Cycle to previous / next page |
+| `C` | Go to Containers page |
+| `N` | Go to Networks page |
+| `I` | Go to Images page |
+| `V` | Go to Volumes page |
+| `T` | Toggle Status filter (cycles states per page) |
+| `U` | Update Docker Engine |
 | `W` | Restart WSL (Windows) / Restart Docker service (Linux) |
 | `H` | Show keyboard shortcut help |
 | `Q` | Quit |
 
-### Shift hotkeys — act on highlighted container / project
+### Containers page
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate the container list |
+| `Space` | Mark / unmark container or project |
+| `Enter` | Open action menu for selected / marked items |
+| `L` | Toggle live log tail panel for highlighted container |
+| `P` | Start all stopped containers |
+| `S` | Stop all running containers (with confirmation) |
+| `D` | Delete marked containers |
+| `T` | Toggle Status filter: All → Running Only → Not Running |
+
+### Networks / Images / Volumes pages
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate the list |
+| `Space` | Mark / unmark item |
+| `Enter` | Open action menu for selected item |
+| `D` | Delete marked items (Networks / Volumes) |
+| `P` | Delete marked images |
+| `X` | Prune unused items |
+| `T` | Toggle Status filter |
+| `Shift+I` | Open Detailed Info for selected item |
+| `Shift+D` | Delete selected item (with confirmation) |
+
+### Shift hotkeys — act on highlighted container / project (Containers page)
 
 | Key | Action |
 |-----|--------|
@@ -142,12 +170,12 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 | Kill | Send SIGKILL to selected container(s) |
 | Delete | Remove selected container(s) |
 | Live Logs | Fullscreen streaming log view (individual containers only) |
-| Info | Detailed container or project info (scrollable) |
+| Detailed Info | Scrollable container / project / network / image / volume info |
 | Terminal | Open interactive shell (running containers only) |
 
 Press `C` or `Esc` to dismiss the menu without taking action.
 
-### Info / Project Info views
+### Info / detail views
 
 | Key | Action |
 |-----|--------|
@@ -161,21 +189,22 @@ Press `C` or `Esc` to dismiss the menu without taking action.
 ## Display
 
 ```
-DocMan - DOcker Container MANager  v1.1.3
-↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions
-P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ W:Restart WSL │ H:Help │ Q:Quit
-──────────────────────────────────────────────────────────────────────────────────────────────────────
- M   NAME                                      ID             IMAGE            PORTS          STATUS
-──────────────────────────────────────────────────────────────────────────────────────────────────────
+DocMan - DOcker Container MANager  v1.1.4                          docker: 29.0.0  │  3/4 running
+←→:Switch Page  │  [C:Containers]  N:Networks  I:Images  V:Volumes  │  U:Update Docker  W:Restart WSL  H:Help  Q:Quit
+↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  │  P:Start All  S:Stop All  D:Delete Marked  L:Live Logs  T:Toggle Status
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ M   NAME                                      ID             IMAGE                PORTS                  STATUS
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 [ ]  myapi
-[ ]    db                                      a1b2c3d4e5f6   postgres         5432→5432      Up 2 hours
-[ ]    web                                     f6e5d4c3b2a1   nginx            8080→80        Up 2 hours
-[ ]  standalone-redis                          1122334455aa   redis            6379→6379      Exited 5 min ago
+[ ]    db                                      a1b2c3d4e5f6   postgres             5432→5432              Up 2 hours
+[ ]    web                                     f6e5d4c3b2a1   nginx                8080→80                Up 2 hours
+[ ]  standalone-redis                          1122334455aa   redis                6379→6379              Exited 5 min ago
 ```
 
 - **Project rows** (cyan) represent a Docker Compose project; selecting one applies actions to all its services
 - **Service rows** are indented under their project
 - **Standalone containers** (not part of a compose project) appear at the top in yellow
+- **Active page** is shown in white `[brackets]` in the navigation bar
 - **Status colours**: green = running, yellow = restarting, red = stopped/exited
 
 ---
@@ -195,8 +224,12 @@ DocMan/
 │   └── Platform.cs             # Platform abstraction (Windows: wsl, Linux: sh -c)
 ├── UI/
 │   ├── Screen.cs               # Console helpers + VT processing + scroll region
-│   ├── ContainerListView.cs    # Main list renderer
+│   ├── AppNav.cs               # Global navigation bar + page routing helpers
+│   ├── ContainerListView.cs    # Main container list renderer
 │   ├── ActionMenu.cs           # Per-container action overlay
+│   ├── NetworksViewer.cs       # Networks page
+│   ├── ImagesViewer.cs         # Images page
+│   ├── VolumesViewer.cs        # Volumes page
 │   ├── InfoViewer.cs           # Scrollable container info + live stats
 │   ├── ProjectInfoViewer.cs    # Scrollable project info + compose file viewer
 │   ├── LogViewer.cs            # Fullscreen log inspector

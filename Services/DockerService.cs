@@ -349,6 +349,43 @@ public class DockerService
         return result;
     }
 
+    public async Task<List<string>> PruneNetworksAsync()
+    {
+        var (output, stderr, _) = await RunWslDetailedAsync("docker network prune --force");
+        var raw = string.IsNullOrWhiteSpace(output) ? stderr : output;
+        var result = new List<string>();
+        var deleted = new List<string>();
+        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("deleted:", StringComparison.OrdinalIgnoreCase) && !line.StartsWith("Total", StringComparison.OrdinalIgnoreCase))
+                deleted.Add(line);
+        }
+        if (deleted.Count == 0) { result.Add("No unused networks to prune."); return result; }
+        result.Add($"Removed {deleted.Count} unused network(s):");
+        foreach (var n in deleted) result.Add($"  - {n}");
+        return result;
+    }
+
+    public async Task<List<string>> PruneVolumesAsync()
+    {
+        var (output, stderr, _) = await RunWslDetailedAsync("docker volume prune --force");
+        var raw = string.IsNullOrWhiteSpace(output) ? stderr : output;
+        var result = new List<string>();
+        var deleted = new List<string>();
+        string? totalSpace = null;
+        foreach (var line in raw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith("Total reclaimed space:", StringComparison.OrdinalIgnoreCase)) totalSpace = line;
+            else if (!line.StartsWith("deleted:", StringComparison.OrdinalIgnoreCase)) deleted.Add(line);
+        }
+        if (deleted.Count == 0) { result.Add("No dangling volumes to prune."); return result; }
+        result.Add($"Removed {deleted.Count} dangling volume(s):");
+        foreach (var v in deleted) result.Add($"  - {v}");
+        if (totalSpace != null) { result.Add(""); result.Add(totalSpace); }
+        return result;
+    }
+
+
     public async Task<(double cpuPercent, double memoryMb, double memoryLimitMb, int cores)> GetTotalStatsAsync()
     {
         // Use JSON format - avoids bash interpreting special chars like |
@@ -602,13 +639,156 @@ public class DockerService
     }
 
     public Process StartLogsProcess(string id)    {
-        var psi = new ProcessStartInfo("wsl", $"docker logs -f --tail 20 {id}")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
+        var psi = Platform.ShellCommand($"docker logs -f --tail 20 {id}");
         return Process.Start(psi)!;
+    }
+
+    public async Task<List<DockerNetworkInfo>> GetNetworksAsync()
+    {
+        var (idsRaw, _, idsExit) = await RunWslDetailedAsync("docker network ls -q");
+        if (idsExit != 0 || string.IsNullOrWhiteSpace(idsRaw)) return new();
+
+        var ids = string.Join(" ", idsRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        var (json, _, exit) = await RunWslDetailedAsync($"docker network inspect {ids}");
+        if (exit != 0 || !json.TrimStart().StartsWith('[')) return new();
+
+        var result = new List<DockerNetworkInfo>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var id      = el.TryGetProperty("Id",     out var idEl)     ? (idEl.GetString()     ?? "")[..Math.Min(12, idEl.GetString()?.Length ?? 0)]  : "";
+                var name    = el.TryGetProperty("Name",   out var nameEl)   ? nameEl.GetString()   ?? "" : "";
+                var driver  = el.TryGetProperty("Driver", out var driverEl) ? driverEl.GetString() ?? "" : "";
+                var scope   = el.TryGetProperty("Scope",  out var scopeEl)  ? scopeEl.GetString()  ?? "" : "";
+                var created = el.TryGetProperty("Created", out var createdEl) ? FormatRelativeTime(createdEl.GetString() ?? "") : "";
+                var internalNet = el.TryGetProperty("Internal", out var internalEl) && internalEl.GetBoolean();
+
+                var subnet = ""; var gateway = "";
+                if (el.TryGetProperty("IPAM", out var ipam) &&
+                    ipam.TryGetProperty("Config", out var configs) &&
+                    configs.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var cfg in configs.EnumerateArray())
+                    {
+                        if (subnet  == "" && cfg.TryGetProperty("Subnet",  out var s)) subnet  = s.GetString() ?? "";
+                        if (gateway == "" && cfg.TryGetProperty("Gateway", out var g)) gateway = g.GetString() ?? "";
+                    }
+                }
+
+                var containerCount = 0;
+                if (el.TryGetProperty("Containers", out var containers) && containers.ValueKind == JsonValueKind.Object)
+                    containerCount = containers.EnumerateObject().Count();
+
+                result.Add(new DockerNetworkInfo(id, name, driver, scope, subnet, gateway, internalNet, containerCount, created));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    public async Task<List<ImageInfo>> GetImagesAsync()
+    {
+        // Get image references currently used by containers (running or stopped)
+        var (usedRaw, _, _) = await RunWslDetailedAsync("docker ps -a --format \"{{.Image}}\"");
+        var usedImages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var img in usedRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            usedImages.Add(img);
+            // Normalise tagless references (e.g. "nginx" → also try "nginx:latest")
+            if (!img.Contains(':') && !img.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                usedImages.Add(img + ":latest");
+        }
+
+        var (output, _, exit) = await RunWslDetailedAsync(
+            "docker image ls --no-trunc --format \"{{.ID}}\\t{{.Repository}}\\t{{.Tag}}\\t{{.Size}}\\t{{.CreatedSince}}\"");
+        if (exit != 0 || string.IsNullOrWhiteSpace(output)) return new();
+
+        var result = new List<ImageInfo>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = line.Split('\t');
+            if (parts.Length < 5) continue;
+            var fullId  = parts[0].StartsWith("sha256:") ? parts[0][7..] : parts[0];
+            var shortId = fullId[..Math.Min(12, fullId.Length)];
+            var repo    = parts[1];
+            var tag     = parts[2];
+            bool inUse  = repo != "<none>" &&
+                          (usedImages.Contains($"{repo}:{tag}") || usedImages.Contains(repo));
+            result.Add(new ImageInfo(shortId, repo, tag, parts[3], parts[4], inUse));
+        }
+        return result;
+    }
+
+    public async Task<List<VolumeInfo>> GetVolumesAsync()
+    {
+        // Get dangling (unused) volume names
+        var (danglingRaw, _, _) = await RunWslDetailedAsync("docker volume ls --filter dangling=true -q");
+        var danglingNames = danglingRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                       .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var (namesRaw, _, namesExit) = await RunWslDetailedAsync("docker volume ls -q");
+        if (namesExit != 0 || string.IsNullOrWhiteSpace(namesRaw)) return new();
+
+        var names = string.Join(" ", namesRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                             .Select(n => $"\"{n}\""));
+        var (json, _, exit) = await RunWslDetailedAsync($"docker volume inspect {names}");
+        if (exit != 0 || !json.TrimStart().StartsWith('[')) return new();
+
+        var result = new List<VolumeInfo>();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var name       = el.TryGetProperty("Name",       out var nameEl)   ? nameEl.GetString()   ?? "" : "";
+                var driver     = el.TryGetProperty("Driver",     out var driverEl) ? driverEl.GetString() ?? "" : "";
+                var mountpoint = el.TryGetProperty("Mountpoint", out var mpEl)     ? mpEl.GetString()     ?? "" : "";
+                var scope      = el.TryGetProperty("Scope",      out var scopeEl)  ? scopeEl.GetString()  ?? "" : "";
+                var created    = el.TryGetProperty("CreatedAt",  out var createdEl) ? FormatRelativeTime(createdEl.GetString() ?? "") : "";
+                result.Add(new VolumeInfo(name, driver, mountpoint, scope, created, danglingNames.Contains(name)));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    public async Task<(bool success, string error)> DeleteNetworkAsync(string id)
+    {
+        var (_, stderr, exit) = await RunWslDetailedAsync($"docker network rm {id}");
+        return exit == 0 ? (true, "") : (false, stderr.Split('\n')[0]);
+    }
+
+    public async Task<(bool success, string error)> DeleteImageAsync(string id)
+    {
+        var (_, stderr, exit) = await RunWslDetailedAsync($"docker image rm {id}");
+        return exit == 0 ? (true, "") : (false, stderr.Split('\n')[0]);
+    }
+
+    public async Task<(bool success, string error)> DeleteVolumeAsync(string name)
+    {
+        var (_, stderr, exit) = await RunWslDetailedAsync($"docker volume rm \"{name}\"");
+        return exit == 0 ? (true, "") : (false, stderr.Split('\n')[0]);
+    }
+
+    public async Task<string> GetNetworkDetailJsonAsync(string id)
+        => (await RunWslDetailedAsync($"docker network inspect {id}")).output;
+
+    public async Task<string> GetImageDetailJsonAsync(string id)
+        => (await RunWslDetailedAsync($"docker image inspect {id}")).output;
+
+    public async Task<string> GetVolumeDetailJsonAsync(string name)
+        => (await RunWslDetailedAsync($"docker volume inspect \"{name}\"")).output;
+
+    private static string FormatRelativeTime(string iso)
+    {
+        if (!DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt)) return iso;
+        var age = DateTime.UtcNow - dt.ToUniversalTime();
+        if (age.TotalDays  >= 365) return $"{(int)(age.TotalDays / 365)}y ago";
+        if (age.TotalDays  >= 30)  return $"{(int)(age.TotalDays / 30)}mo ago";
+        if (age.TotalDays  >= 1)   return $"{(int)age.TotalDays}d ago";
+        if (age.TotalHours >= 1)   return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalMinutes}m ago";
     }
 }

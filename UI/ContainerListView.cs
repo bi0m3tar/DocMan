@@ -59,41 +59,56 @@ public class ContainerListView
         return displayRows;
     }
 
-    public void Render(List<DisplayRow> displayRows, int selectedIndex, HashSet<int> markedIndices, bool showOnlyRunning, (double cpu, double memMb, double limitMb, int cores) stats = default, bool statsReady = false, bool liveLogMode = false, List<string>? liveLogLines = null, string? liveLogLabel = null, string dockerInstalled = "", string dockerCandidate = "", bool dockerVersionReady = false)
+    public void Render(List<DisplayRow> displayRows, int selectedIndex, HashSet<int> markedIndices, int runningFilter, (double cpu, double memMb, double limitMb, int cores) stats = default, bool statsReady = false, bool liveLogMode = false, List<string>? liveLogLines = null, string? liveLogLabel = null, string dockerInstalled = "", string dockerCandidate = "", bool dockerVersionReady = false)
     {
-        // Don't clear screen on every render to prevent flickering
         Screen.SetCursorPosition(0, 0);
-        
-        // Row 0: title + version (right of name) + flags on the right
-        var appVersion = "v" + (System.Reflection.Assembly.GetExecutingAssembly()
-            .GetName().Version?.ToString(3) ?? "?");
-        var titleBase = "DocMan - DOcker Container MANager  " + appVersion;
-        Screen.Write(titleBase, ConsoleColor.Green);
-        var flagParts = new List<(string text, ConsoleColor color)>();
-        if (showOnlyRunning) flagParts.Add(("  [RUNNING ONLY]", ConsoleColor.Green));
+        var width = Console.WindowWidth;
+
+        // Row 0: title bar with docker info right-aligned
+        var running = displayRows.Count(r => !r.IsProjectRow && r.Container?.IsRunning == true);
+        var total   = displayRows.Count(r => !r.IsProjectRow);
+        var outdated = dockerVersionReady && IsVersionNewer(dockerCandidate, dockerInstalled);
+        var appVersion = "v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
+        var titleBase  = $"DocMan - DOcker Container MANager  {appVersion}";
+        var flagParts  = new List<(string text, ConsoleColor color)>();
+        if (runningFilter == 1) flagParts.Add(("  [RUNNING ONLY]", ConsoleColor.Green));
+        else if (runningFilter == 2) flagParts.Add(("  [NOT RUNNING]", ConsoleColor.Yellow));
         if (liveLogMode)     flagParts.Add(("  [LIVE LOGS ON]",  ConsoleColor.Yellow));
         int flagsLen = flagParts.Sum(p => p.text.Length);
-        Screen.Write(new string(' ', Math.Max(0, 183 - titleBase.Length - flagsLen)), ConsoleColor.Green);
+
+        // Build right-side summary segments (version, optional update badge, running count)
+        string summaryBase   = dockerInstalled.Length > 0 ? $"  docker: {dockerInstalled}" : "";
+        string updateBadge   = (outdated && dockerInstalled.Length > 0) ? "(update available)" : "";
+        string summarySuffix = dockerInstalled.Length > 0 ? $"  │  {running}/{total} running  " : "";
+        int    rightLen      = summaryBase.Length + updateBadge.Length + summarySuffix.Length;
+        int    padding       = Math.Max(0, 184 - titleBase.Length - flagsLen - rightLen);
+
+        Screen.Write(titleBase, ConsoleColor.Green);
         foreach (var (text, color) in flagParts) Screen.Write(text, color);
+        Screen.Write(new string(' ', padding), ConsoleColor.Green);
+        if (dockerInstalled.Length > 0)
+        {
+            Screen.Write(summaryBase, ConsoleColor.DarkGray);
+            if (updateBadge.Length > 0) Screen.Write(updateBadge, ConsoleColor.Red);
+            Screen.Write(summarySuffix, ConsoleColor.DarkGray);
+        }
         Screen.Write("\n");
 
-        Screen.WriteLine("", ConsoleColor.Gray);
+        // Row 1: global nav
+        AppNav.RenderGlobalNav(AppPage.Containers, width);
+        Screen.Write("\n");
 
-        // Rows 2-3: controls split across two lines — padded to full width so old text is never left behind
-        var controls1 = "↑↓:Navigate │ SPACE:Mark │ ENTER:Container Actions";
-        var controls2 = "P:Start All │ S:Stop All │ D:Delete All │ L:Live Logs │ R:Toggle Running │ N:Prune All │ U:Update Docker │ " +
-                        (DocMan.Services.Platform.IsWindows ? "W:Restart WSL" : "W:Restart Docker") +
-                        " │ H:Help │ Q:Quit";
-        Screen.WriteLine(controls1.PadRight(183), ConsoleColor.Cyan);
-        Screen.WriteLine(controls2.PadRight(183), ConsoleColor.Cyan);
+        // Row 2: container-specific controls
+        var controls2 = "↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  │  P:Start All  S:Stop All  D:Delete Marked  L:Live Logs  T:Toggle Status";
+        Screen.WriteLine(controls2.PadRight(184), ConsoleColor.Cyan);
         
         // Column headers
-        Screen.WriteLine(new string('-', 183), ConsoleColor.DarkGray);
+        Screen.WriteLine(new string('-', 184), ConsoleColor.DarkGray);
         Screen.WriteLine(string.Format("{0,-3} {1,-41} {2,-12} {3,-59} {4,-24} {5,-28} {6,-10}", 
-            " M", "NAME", "ID", "IMAGE", "PORTS", "STATUS", "HEALTH").PadRight(183), ConsoleColor.Green);
-        Screen.WriteLine(new string('-', 183), ConsoleColor.DarkGray);
+            " M", "NAME", "ID", "IMAGE", "PORTS", "STATUS", "HEALTH").PadRight(184), ConsoleColor.Green);
+        Screen.WriteLine(new string('-', 184), ConsoleColor.DarkGray);
 
-        _topRow = 7;
+        _topRow = 6;
 
         for (int i = 0; i < displayRows.Count; i++)
         {
@@ -140,12 +155,12 @@ public class ContainerListView
 
                 if (i == selectedIndex)
                 {
-                    Screen.Write((part1 + part2).PadRight(183) + "\n", ConsoleColor.Black, ConsoleColor.White);
+                    Screen.Write((part1 + part2).PadRight(184) + "\n", ConsoleColor.Black, ConsoleColor.White);
                 }
                 else
                 {
                     Screen.Write(part1.PadRight(part1.Length), ConsoleColor.Yellow);
-                    Screen.Write(part2.PadRight(183 - part1.Length) + "\n", statusColor);
+                    Screen.Write(part2.PadRight(184 - part1.Length) + "\n", statusColor);
                 }
                 continue;
             }
@@ -181,29 +196,28 @@ public class ContainerListView
             // Highlight selected row with inverse video
             if (i == selectedIndex)
             {
-                Screen.WriteLine(line.PadRight(183), ConsoleColor.Black, ConsoleColor.White);
+                Screen.WriteLine(line.PadRight(184), ConsoleColor.Black, ConsoleColor.White);
             }
             else
             {
-                Screen.WriteLine(line.PadRight(183), contentColor);
+                Screen.WriteLine(line.PadRight(184), contentColor);
             }
         }
 
-        // Stats + docker-version rows: pinned above log panel in live-log mode, just after containers otherwise
-        var afterRows = _topRow + displayRows.Count;
-        var clearBottom = liveLogMode ? Screen.Height - LogPanelHeight - 1 : Screen.Height;
+        // Stats pinned to bottom footer; docker version shown in title bar — no mid-screen version row
+        var afterRows   = _topRow + displayRows.Count;
+        var clearBottom = liveLogMode ? Screen.Height - LogPanelHeight - 1 : Screen.Height - 1;
         for (int i = afterRows; i < clearBottom; i++) Screen.ClearLine(i);
 
-        _statsRow = liveLogMode
+        _statsRow         = liveLogMode
             ? (Screen.Height - LogPanelHeight - 1 >= 0 ? Screen.Height - LogPanelHeight - 1 : -1)
-            : (afterRows + 2 < Screen.Height ? afterRows + 2 : -1);
-        _dockerVersionRow = _statsRow > 0 ? _statsRow - 1 : -1;
-        _runningCount = displayRows.Count(r => !r.IsProjectRow && r.Container != null && r.Container.IsRunning);
-        _totalCount   = displayRows.Count(r => !r.IsProjectRow && r.Container != null);
+            : Screen.Height - 1;
+        _dockerVersionRow = -1; // version shown in title bar
+        _runningCount     = displayRows.Count(r => !r.IsProjectRow && r.Container != null && r.Container.IsRunning);
+        _totalCount       = displayRows.Count(r => !r.IsProjectRow && r.Container != null);
 
         if (_dockerVersionRow >= 0) RenderDockerVersion(dockerInstalled, dockerCandidate, dockerVersionReady);
         if (_statsRow >= 0)         RenderStats(stats, statsReady);
-
         // Render live log panel as part of the full render
         if (liveLogMode && liveLogLines != null)
         {
@@ -219,12 +233,12 @@ public class ContainerListView
         Console.SetCursorPosition(0, _dockerVersionRow);
         if (!versionReady)
         {
-            Screen.Write("  Docker version: gathering...".PadRight(183), ConsoleColor.DarkCyan);
+            Screen.Write("  Docker version: gathering...".PadRight(184), ConsoleColor.DarkCyan);
             return;
         }
         if (string.IsNullOrEmpty(installed))
         {
-            Screen.Write("  Docker version: not found (docker-ce not installed via apt)".PadRight(183), ConsoleColor.DarkGray);
+            Screen.Write("  Docker version: not found (docker-ce not installed via apt)".PadRight(184), ConsoleColor.DarkGray);
             return;
         }
         bool outdated = IsVersionNewer(candidate, installed);
@@ -232,7 +246,7 @@ public class ContainerListView
         var suffix = $"  /  Latest: {candidate}";
         Screen.Write(prefix, ConsoleColor.DarkCyan);
         Screen.Write(installed, outdated ? ConsoleColor.Red : ConsoleColor.DarkCyan);
-        Screen.Write(suffix.PadRight(183 - prefix.Length - installed.Length), ConsoleColor.DarkCyan);
+        Screen.Write(suffix.PadRight(184 - prefix.Length - installed.Length), ConsoleColor.DarkCyan);
     }
 
     private static bool IsVersionNewer(string candidate, string installed)
@@ -247,21 +261,21 @@ public class ContainerListView
         string statsText;
         if (!statsReady)
         {
-            statsText = $"  Containers: {_runningCount}/{_totalCount} running   Total CPU: gathering...   Total Memory: gathering...";
+            statsText = $"  {_runningCount}/{_totalCount} running  │  CPU: gathering...  │  Memory: gathering...  │  auto-refreshes every 5s";
         }
         else if (stats.memMb > 0 || stats.cpu > 0)
         {
             var memStr   = stats.memMb   >= 1024 ? $"{stats.memMb   / 1024:F1} GiB" : $"{stats.memMb:F0} MiB";
             var limitStr = stats.limitMb >= 1024 ? $"{stats.limitMb / 1024:F1} GiB" : $"{stats.limitMb:F0} MiB";
             var coresStr = stats.cores > 0 ? $" ({stats.cores} cores)" : "";
-            statsText = $"  Containers: {_runningCount}/{_totalCount} running   Total CPU: {stats.cpu:F1}%{coresStr}   Total Memory: {memStr} / {limitStr}";
+            statsText = $"  {_runningCount}/{_totalCount} running  │  CPU: {stats.cpu:F1}%{coresStr}  │  Memory: {memStr} / {limitStr}  │  auto-refreshes every 5s";
         }
         else
         {
-            statsText = $"  Containers: {_runningCount}/{_totalCount} running   Total CPU: --   Total Memory: --";
+            statsText = $"  {_runningCount}/{_totalCount} running  │  CPU: --  │  Memory: --  │  auto-refreshes every 5s";
         }
         Console.SetCursorPosition(0, _statsRow);
-        Screen.Write(statsText.PadRight(183), ConsoleColor.DarkCyan);
+        Screen.Write(statsText.PadRight(Console.WindowWidth), ConsoleColor.DarkGray);
     }
 
     public void RenderLiveLogPanel(List<string> snapshot, string label)
