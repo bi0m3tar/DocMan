@@ -677,6 +677,17 @@ class Program
                                 }
                                 break;
 
+                            case ConsoleKey.F:
+                                // F: Open compose file picker and run selected file
+                                StopLiveLogStream();
+                                liveLogMode = false;
+                                var pickedFile = ComposeFilePicker.Pick();
+                                if (pickedFile != null)
+                                    await composeService.RunComposeFileAsync(pickedFile);
+                                containerListView.Render(displayRows, selectedIndex, markedIndices, runningFilter, stats, statsReady, liveLogMode, liveLogLines, liveLogLabel, dockerInstalled, dockerCandidate, dockerVersionReady);
+                                needsRender = false; lastRefresh = DateTime.MinValue;
+                                break;
+
                             case ConsoleKey.H:
                                 StopLiveLogStream();
                                 liveLogMode = false;

@@ -124,6 +124,7 @@ public static class HelpViewer
                 ("P",             "Start ALL stopped containers"),
                 ("S",             "Stop ALL running containers (with confirmation)"),
                 ("D",             "Delete marked containers"),
+                ("F",             "Browse filesystem and run a selected compose file  (docker compose up -d)"),
                 ("T",             "Cycle filter: All → Running Only → Not Running"),
             }),
             ("Containers Page — Shift Hotkeys  (act on highlighted container/project)", new()

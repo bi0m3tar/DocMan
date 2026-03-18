@@ -98,7 +98,7 @@ public class ContainerListView
         AppNav.RenderGlobalNav(AppPage.Containers, width);
 
         // Row 2: container-specific controls
-        var controls2 = "↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  D:Delete Marked  T:Toggle Status  │  P:Start All  S:Stop All  L:Live Logs";
+        var controls2 = "↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  D:Delete Marked  T:Toggle Status  │  P:Start All  S:Stop All  L:Live Logs  F:Run from File";
         Console.SetCursorPosition(0, 2);
         Screen.WriteLine(controls2.PadRight(184), ConsoleColor.Cyan);
 

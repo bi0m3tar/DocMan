@@ -129,6 +129,7 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 | `P` | Start all stopped containers |
 | `S` | Stop all running containers (with confirmation) |
 | `D` | Delete marked containers |
+| `F` | Open file browser to pick and run a compose file (`docker compose up -d`) |
 | `T` | Toggle Status filter: All → Running Only → Not Running |
 
 ### Networks / Images / Volumes pages
@@ -138,8 +139,7 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 | `↑` / `↓` | Navigate the list |
 | `Space` | Mark / unmark item |
 | `Enter` | Open action menu for selected item |
-| `D` | Delete marked items (Networks / Volumes) |
-| `D` | Delete marked images |
+| `D` | Delete marked items (Networks / Images / Volumes) |
 | `X` | Prune unused items |
 | `T` | Toggle Status filter |
 | `Shift+I` | Open Detailed Info for selected item |

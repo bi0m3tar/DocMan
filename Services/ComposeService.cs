@@ -20,6 +20,118 @@ public class ComposeService
         }
     }
 
+    public async Task RunComposeFileAsync(string filePath)
+    {
+        var dockerPath  = Platform.NormalizePathForDockerCommand(filePath);
+        var projectName = Path.GetFileName(Path.GetDirectoryName(filePath)) ?? Path.GetFileNameWithoutExtension(filePath);
+
+        // Use near-full width so long image names / pull progress aren't truncated
+        var overlayWidth = Math.Min(Screen.Width, 160);
+        var overlay = new Overlay(5, overlayWidth, Screen.Height - 8);
+        var statusLines = new List<string>
+        {
+            "",
+            $"Project : {projectName}",
+            $"File    : {Path.GetFileName(filePath)}",
+            $"Dir     : {Path.GetDirectoryName(filePath)}",
+            ""
+        };
+        overlay.Show("Run Compose File", statusLines);
+
+        // Verify the file exists before attempting
+        if (!File.Exists(filePath))
+        {
+            statusLines.Add($"✗ File not found: {filePath}");
+            statusLines.Add(""); statusLines.Add("Press any key to close...");
+            overlay.Update(statusLines); Console.ReadKey(true); overlay.Hide(); return;
+        }
+
+        statusLines.Add($"Command: docker compose -f \"{dockerPath}\" up -d");
+        statusLines.Add("");
+        statusLines.Add("Note: large images (e.g. databases) may take several minutes to pull.");
+        statusLines.Add("ESC/Enter to dismiss — compose continues running in background.");
+        statusLines.Add("");
+        overlay.Update(statusLines);
+
+        try
+        {
+            // Use ArgumentList to bypass shell-escaping issues entirely
+            ProcessStartInfo psi;
+            if (Platform.IsWindows)
+            {
+                psi = new ProcessStartInfo("wsl") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                psi.ArgumentList.Add("docker"); psi.ArgumentList.Add("compose");
+                psi.ArgumentList.Add("-f");     psi.ArgumentList.Add(dockerPath);
+                psi.ArgumentList.Add("up");     psi.ArgumentList.Add("-d");
+            }
+            else
+            {
+                psi = new ProcessStartInfo("docker") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+                psi.ArgumentList.Add("compose");
+                psi.ArgumentList.Add("-f"); psi.ArgumentList.Add(filePath);
+                psi.ArgumentList.Add("up"); psi.ArgumentList.Add("-d");
+            }
+
+            var process   = new Process { StartInfo = psi };
+            process.Start();
+
+            var appendLock  = new object();
+            var overlayOpen = true;
+
+            // docker compose writes progress to stderr, not stdout — read both streams
+            // Use overlay content width so lines aren't truncated shorter than necessary
+            var maxLine = overlayWidth - 4;
+            void AppendLine(string? line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) return;
+                lock (appendLock)
+                {
+                    statusLines.Add(line.Length > maxLine ? line[..maxLine] : line);
+                    if (overlayOpen) overlay.Update(statusLines);
+                }
+            }
+
+            var stdoutTask  = Task.Run(async () => { while (!process.StandardOutput.EndOfStream) AppendLine(await process.StandardOutput.ReadLineAsync()); });
+            var stderrTask  = Task.Run(async () => { while (!process.StandardError.EndOfStream)  AppendLine(await process.StandardError.ReadLineAsync()); });
+            var processDone = process.WaitForExitAsync();
+
+            while (!processDone.IsCompleted)
+            {
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.Enter)
+                    {
+                        overlayOpen = false;
+                        overlay.Hide();
+                        _ = Task.WhenAll(stdoutTask, stderrTask, processDone).ContinueWith(_ => process.Dispose());
+                        return;
+                    }
+                }
+                await Task.Delay(50);
+            }
+
+            await Task.WhenAll(stdoutTask, stderrTask);
+
+            lock (appendLock)
+            {
+                statusLines.Add("");
+                statusLines.Add(process.ExitCode == 0
+                    ? "✓ Compose project started successfully"
+                    : $"✗ Failed with exit code {process.ExitCode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            statusLines.Add(""); statusLines.Add($"✗ Error: {ex.Message}");
+        }
+
+        statusLines.Add(""); statusLines.Add("Press any key to close...");
+        overlay.Update(statusLines);
+        Console.ReadKey(true);
+        overlay.Hide();
+    }
+
     public async Task StartProjectAsync(string projectName, string? composeFile, string? workingDir, bool forceRecreate = false)
     {
         var overlay = new Overlay(6, 90, 21);
@@ -60,20 +172,26 @@ public class ComposeService
 
             process.Start();
 
-            var stderrTask = process.StandardError.ReadToEndAsync();
             var overlayOpen = true;
 
-            var outputTask = Task.Run(async () =>
+            // docker compose writes progress to stderr, not stdout — read both streams
+            void AppendLine(string? line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) return;
+                statusLines.Add(line.Length > 85 ? line[..85] : line);
+                if (overlayOpen) overlay.Update(statusLines);
+            }
+
+            var stdoutTask = Task.Run(async () =>
             {
                 while (!process.StandardOutput.EndOfStream)
-                {
-                    var line = await process.StandardOutput.ReadLineAsync();
-                    if (!string.IsNullOrWhiteSpace(line))
-                    {
-                        statusLines.Add(line.Length > 85 ? line[..85] : line);
-                        if (overlayOpen) overlay.Update(statusLines);
-                    }
-                }
+                    AppendLine(await process.StandardOutput.ReadLineAsync());
+            });
+
+            var stderrTask = Task.Run(async () =>
+            {
+                while (!process.StandardError.EndOfStream)
+                    AppendLine(await process.StandardError.ReadLineAsync());
             });
 
             var processDone = process.WaitForExitAsync();
@@ -89,7 +207,7 @@ public class ComposeService
                         overlayOpen = false;
                         overlay.Hide();
                         // Let process + tasks finish in background; dispose when done
-                        _ = Task.WhenAll(outputTask, stderrTask, processDone)
+                        _ = Task.WhenAll(stdoutTask, stderrTask, processDone)
                                 .ContinueWith(_ => process.Dispose());
                         return;
                     }
@@ -97,23 +215,12 @@ public class ComposeService
                 await Task.Delay(50);
             }
 
-            await Task.WhenAll(outputTask, stderrTask);
+            await Task.WhenAll(stdoutTask, stderrTask);
 
-            if (process.ExitCode == 0)
-            {
-                statusLines.Add("");
-                statusLines.Add($"✓ Project {action.ToLower()}d successfully");
-            }
-            else
-            {
-                var stderr = await stderrTask;
-                statusLines.Add("");
-                statusLines.Add($"✗ Failed with exit code {process.ExitCode}");
-                if (!string.IsNullOrWhiteSpace(stderr))
-                    statusLines.Add(stderr.Split('\n')[0].Trim().Length > 85
-                        ? stderr.Split('\n')[0].Trim()[..85]
-                        : stderr.Split('\n')[0].Trim());
-            }
+            statusLines.Add("");
+            statusLines.Add(process.ExitCode == 0
+                ? $"✓ Project {action.ToLower()}d successfully"
+                : $"✗ Failed with exit code {process.ExitCode}");
         }
         catch (Exception ex)
         {

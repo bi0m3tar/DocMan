@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.6] - 2026-03-18
+
+### Added
+
+- **`F:Run from File`** — interactive file browser on the Containers page lets you navigate the filesystem, select any `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml` file, and run `docker compose up -d` on it
+  - Browser starts in the current working directory
+  - Directories shown in cyan, compose files in green; hidden directories excluded
+  - `↑` / `↓` navigate with wrap-around; `→` / `Enter` enter a directory; `←` / `Backspace` go up to parent; `PgUp` / `PgDn` page through long lists; `ESC` cancel
+  - Progress overlay streams all docker compose output in real time (stdout + stderr); `ESC` / `Enter` dismisses the overlay while compose continues in the background
+  - On Windows, compose file path is automatically converted from the Windows filesystem (`C:\…` / `\\wsl.localhost\…`) to the appropriate WSL Linux path (`/mnt/c/…`)
+
+---
+
 ## [1.1.5] - 2026-03-18
 
 ### Changed
