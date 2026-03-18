@@ -28,7 +28,7 @@ public static class AppNav
         var after   = hasUpdate ? $"{dockerSummary[(markerIdx + updateMarker.Length)..]}  " : "";
         var rightLen = before.Length + (hasUpdate ? updateMarker.Length + after.Length : 0);
         int flagLen  = flags?.Sum(f => f.text.Length) ?? 0;
-        var padding  = Math.Max(0, width - title.Length - flagLen - rightLen);
+        var padding  = Math.Max(0, 184 - title.Length - flagLen - rightLen);
 
         Console.SetCursorPosition(0, 0);
         Console.ForegroundColor = ConsoleColor.Green;
@@ -52,15 +52,20 @@ public static class AppNav
         Console.ResetColor();
     }
 
-    // Row 1: global nav bar — fixed-width slots, no leading indent
+    // Row 1: nav shortcuts + global actions  |  Row 3: page tabs (right above ---)
     public static void RenderGlobalNav(AppPage current, int width)
     {
+        // Row 1 — ←→:Switch Page + global actions
         Console.SetCursorPosition(0, 1);
-
-        const string prefix = "←→:Switch Page  │  ";
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write(prefix);
-        int written = prefix.Length;
+        var row1 = "←→:Switch Page  │  U:Update Docker  ";
+        row1 += Platform.IsWindows ? "W:Restart WSL  " : "W:Restart Docker  ";
+        row1 += "H:Help  Q:Quit";
+        Console.Write(row1.PadRight(width));
+
+        // Row 3 — page tabs
+        Console.SetCursorPosition(0, 3);
+        int written = 0;
         for (int i = 0; i < Pages.Length; i++)
         {
             var (label, page) = Pages[i];
@@ -69,15 +74,12 @@ public static class AppNav
             int slotWidth = label.Length + 2;
             string entry  = active ? $"[{label}]" : $" {label}";
             string padded = isLast ? entry.PadRight(slotWidth) : entry.PadRight(slotWidth + 2);
-            Console.ForegroundColor = active ? ConsoleColor.White : ConsoleColor.Cyan;
+            Console.ForegroundColor = active ? ConsoleColor.White : ConsoleColor.Gray;
             Console.Write(padded);
             written += padded.Length;
         }
         Console.ForegroundColor = ConsoleColor.Cyan;
-        var suffix = "  │  U:Update Docker  ";
-        suffix += Platform.IsWindows ? "W:Restart WSL  " : "W:Restart Docker  ";
-        suffix += "H:Help  Q:Quit";
-        Console.Write(suffix.PadRight(Math.Max(0, width - written)));
+        Console.Write(new string(' ', Math.Max(0, width - written)));
         Console.ResetColor();
     }
 

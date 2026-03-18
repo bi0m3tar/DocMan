@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.5] - 2026-03-18
+
+### Changed
+
+- Restructured all menus.
+- **Help page** revised.
+
+### Fixed
+
+- **Images page**: Delete Marked key corrected from `P` to `D` — now consistent with Networks and Volumes pages
+
+---
+
 ## [1.1.4] - 2026-03-17
 
 ### Added
@@ -23,8 +36,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Action menu label "Info" / "Details" unified to **"Detailed Info"** across all pages
-- Container page: `D:Delete All` renamed to **`D:Delete Marked`** — only deletes marked containers; no-op if nothing is marked
-- Container page: `R:Toggle Running` moved to **`T:Toggle Status`** with a 3-state cycle (All / Running Only / Not Running); `R` now only handles `Shift+R` (Restart)
+- **Container page**: `D:Delete All` renamed to **`D:Delete Marked`** — only deletes marked containers; no-op if nothing is marked
+- **Container page**: `R:Toggle Running` moved to **`T:Toggle Status`** with a 3-state cycle (All / Running Only / Not Running); `R` now only handles `Shift+R` (Restart)
 - Separator lines standardised to **184 characters** on all pages
 - Footer on Networks / Images / Volumes pages shows unused/dangling counts without warning icons
 - Filter status badges (e.g. `[IN USE]`, `[NOT RUNNING]`) appear in the title bar rather than the controls row

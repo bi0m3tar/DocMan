@@ -322,29 +322,29 @@ public class NetworksViewer
 
         Console.SetCursorPosition(0, 2);
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write($"↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  │  D:Delete Marked  X:Prune  T:Toggle Status".PadRight(width));
+        Console.Write($"↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  D:Delete Marked  T:Toggle Status  │  X:Prune".PadRight(width));
         Console.ResetColor();
 
-        // Row 3: column headers
-        Console.SetCursorPosition(0, 3);
+        // Row 3 = tabs written by AppNav; rows 4-6 = headers
+        Console.SetCursorPosition(0, 4);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.Write(new string('-', 184));
-        Console.SetCursorPosition(0, 4);
+        Console.SetCursorPosition(0, 5);
         Console.ForegroundColor = ConsoleColor.Green;
         Console.Write(string.Format("{0,-3} {1,-60} {2,-10} {3,-10} {4,-20} {5,-5} {6}",
             " M", "NAME", "STATUS", "DRIVER", "SUBNET", "CTRS", "CREATED").PadRight(184));
-        Console.SetCursorPosition(0, 5);
+        Console.SetCursorPosition(0, 6);
         Console.ForegroundColor = ConsoleColor.DarkGray;
         Console.Write(new string('-', 184));
         Console.ResetColor();
 
         if (error != null)
-        { Console.SetCursorPosition(0, 6); Console.ForegroundColor = ConsoleColor.Red; Console.Write($"  Error: {error}".PadRight(width)); return; }
+        { Console.SetCursorPosition(0, 7); Console.ForegroundColor = ConsoleColor.Red; Console.Write($"  Error: {error}".PadRight(width)); return; }
 
         if (networks == null)
-        { Console.SetCursorPosition(0, 6); Console.ForegroundColor = ConsoleColor.DarkGray; Console.Write("  Loading...".PadRight(width)); return; }
+        { Console.SetCursorPosition(0, 7); Console.ForegroundColor = ConsoleColor.DarkGray; Console.Write("  Loading...".PadRight(width)); return; }
 
-        var dataRow     = 6;
+        var dataRow     = 7;
         var contentRows = height - 2 - dataRow;
         for (int i = 0; i < networks.Count && i < contentRows; i++, dataRow++)
         {

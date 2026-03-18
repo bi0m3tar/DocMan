@@ -139,7 +139,7 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFil
 | `Space` | Mark / unmark item |
 | `Enter` | Open action menu for selected item |
 | `D` | Delete marked items (Networks / Volumes) |
-| `P` | Delete marked images |
+| `D` | Delete marked images |
 | `X` | Prune unused items |
 | `T` | Toggle Status filter |
 | `Shift+I` | Open Detailed Info for selected item |

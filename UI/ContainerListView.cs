@@ -94,21 +94,22 @@ public class ContainerListView
         }
         Screen.Write("\n");
 
-        // Row 1: global nav
+        // Rows 1+3: global nav + tabs
         AppNav.RenderGlobalNav(AppPage.Containers, width);
-        Screen.Write("\n");
 
         // Row 2: container-specific controls
-        var controls2 = "↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  │  P:Start All  S:Stop All  D:Delete Marked  L:Live Logs  T:Toggle Status";
+        var controls2 = "↑↓:Navigate     │  SPACE:Mark  ENTER:Actions  D:Delete Marked  T:Toggle Status  │  P:Start All  S:Stop All  L:Live Logs";
+        Console.SetCursorPosition(0, 2);
         Screen.WriteLine(controls2.PadRight(184), ConsoleColor.Cyan);
-        
-        // Column headers
+
+        // Rows 4-6: separator / headers / separator  (row 3 = tabs, written by AppNav)
+        Console.SetCursorPosition(0, 4);
         Screen.WriteLine(new string('-', 184), ConsoleColor.DarkGray);
         Screen.WriteLine(string.Format("{0,-3} {1,-41} {2,-12} {3,-59} {4,-24} {5,-28} {6,-10}", 
             " M", "NAME", "ID", "IMAGE", "PORTS", "STATUS", "HEALTH").PadRight(184), ConsoleColor.Green);
         Screen.WriteLine(new string('-', 184), ConsoleColor.DarkGray);
 
-        _topRow = 6;
+        _topRow = 7;
 
         for (int i = 0; i < displayRows.Count; i++)
         {

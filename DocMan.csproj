@@ -9,7 +9,7 @@
     <AssemblyName>docman</AssemblyName>
     <ToolCommandName>docman</ToolCommandName>
     <PackageId>DocMan</PackageId>
-    <Version>1.1.4</Version>
+    <Version>1.1.5</Version>
     <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>
 
